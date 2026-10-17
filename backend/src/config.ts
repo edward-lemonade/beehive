@@ -15,6 +15,7 @@ const envSchema = z.object({
   TIME_SCALE: z.coerce.number().default(1),
   SEARCH_BUDGET_EXPANSIONS: z.coerce.number().default(200),
   SEARCH_BUDGET_MS: z.coerce.number().default(5000),
+  BUS_LOG_CONTENT: z.enum(['true', 'false']).optional(),
   NEGOTIATION_ROUNDS: z.coerce.number().default(3),
   VITE_API_URL: z.string().optional(),
   VITE_CLERK_PUBLISHABLE_KEY: z.string().optional(),

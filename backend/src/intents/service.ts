@@ -48,6 +48,10 @@ export function setIntentRepository(repository?: IntentRepository): void {
   activeRepository = repository ?? intentRepository;
 }
 
+export function getIntentRepository(): IntentRepository {
+  return activeRepository;
+}
+
 export function setIntentParser(parser?: IntentParser): void {
   activeParser = parser ?? parseIntentWithLLM;
 }

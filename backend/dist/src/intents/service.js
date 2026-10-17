@@ -20,6 +20,9 @@ let activeParser = parseIntentWithLLM;
 export function setIntentRepository(repository) {
     activeRepository = repository ?? intentRepository;
 }
+export function getIntentRepository() {
+    return activeRepository;
+}
 export function setIntentParser(parser) {
     activeParser = parser ?? parseIntentWithLLM;
 }

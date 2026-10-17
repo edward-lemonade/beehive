@@ -46,17 +46,30 @@ export const edgeCoverSchema = z.object({
     provider: z.string(),
     item: itemSchema,
 });
+export const flowSchema = z.object({
+    from: z.string(),
+    to: z.string(),
+    item: itemSchema,
+});
+export const relevantEdgeSchema = z.object({
+    self: z.string(),
+    other: z.string(),
+    otherVersion: z.number().int().nonnegative(),
+    selfWants: z.array(edgeCoverSchema),
+    selfGives: z.array(flowSchema),
+});
+export const nearMissSchema = z.object({
+    otherHandle: z.string(),
+    gapCents: z.number().int().nonnegative(),
+    kind: z.enum(['price', 'dates']),
+    text: z.string(),
+});
 export const signalSchema = z.object({
     from: z.string(),
     to: z.string(),
     fromVersion: z.number().int().nonnegative(),
     toVersion: z.number().int().nonnegative(),
     satisfiable: z.boolean(),
-});
-export const flowSchema = z.object({
-    from: z.string(),
-    to: z.string(),
-    item: itemSchema,
 });
 export const linkSchema = z.object({
     id: z.string(),
@@ -81,11 +94,11 @@ export const arrangementSchema = z.object({
     links: z.array(linkSchema),
 });
 export const busBodySchema = z.union([
-    z.object({ type: z.literal('signal'), fromVersion: z.number().int().nonnegative(), toVersion: z.number().int().nonnegative(), satisfiable: z.boolean() }),
-    z.object({ type: z.literal('offer'), linkId: z.string(), round: z.number().int().nonnegative(), amountCents: z.number().int() }),
-    z.object({ type: z.literal('accept'), linkId: z.string(), amountCents: z.number().int() }),
-    z.object({ type: z.literal('walk'), linkId: z.string() }),
-    z.object({ type: z.literal('say'), linkId: z.string(), text: z.string() }),
+    z.object({ type: z.literal('signal'), fromVersion: z.number().int().nonnegative(), toVersion: z.number().int().nonnegative(), satisfiable: z.boolean() }).strict(),
+    z.object({ type: z.literal('offer'), linkId: z.string(), round: z.number().int().nonnegative(), amountCents: z.number().int() }).strict(),
+    z.object({ type: z.literal('accept'), linkId: z.string(), amountCents: z.number().int() }).strict(),
+    z.object({ type: z.literal('walk'), linkId: z.string() }).strict(),
+    z.object({ type: z.literal('say'), linkId: z.string(), text: z.string() }).strict(),
 ]);
 export const envelopeSchema = z.object({
     id: z.string(),
@@ -95,9 +108,9 @@ export const envelopeSchema = z.object({
     trace: z.object({
         sentryTrace: z.string().optional(),
         baggage: z.string().optional(),
-    }),
+    }).strict(),
     body: busBodySchema,
-});
+}).strict();
 export const SEARCH_BUDGET_EXPANSIONS = 200;
 export const SEARCH_BUDGET_MS = 5000;
 export const NEGOTIATION_ROUNDS = 3;

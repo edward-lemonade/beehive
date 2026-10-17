@@ -3,6 +3,10 @@ import { logger } from 'hono/logger';
 import { config } from './config.js';
 import { events } from './events.js';
 import { sseHub } from './sse/hub.js';
+import { discoveryRouter } from './discovery/routes.js';
+import { startRuntime } from './runtime/registry.js';
+import { runtimeRouter } from './runtime/routes.js';
+import { startDiscovery } from './discovery/service.js';
 import { intentsRouter, publicMapRouter } from './intents/routes.js';
 
 const app = new Hono();
@@ -16,7 +20,14 @@ app.get('/stream', (c) => {
 });
 
 app.route('/intents', intentsRouter);
+app.route('/intents', discoveryRouter);
+app.route('/intents', runtimeRouter);
 app.route('/map', publicMapRouter);
+
+if (!process.env.VITEST) {
+  startDiscovery();
+  startRuntime().catch((error) => console.error('runtime failed to start', error));
+}
 
 app.onError((err, c) => c.json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' }, 500));
 

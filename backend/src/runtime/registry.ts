@@ -1,0 +1,86 @@
+import { refreshEdges } from '../discovery/service.js';
+import { events } from '../events.js';
+import { getIntentRepository } from '../intents/service.js';
+import { Agent, type WakeReason } from './agent.js';
+import { bus } from './bus.js';
+import { buildGuardContext } from './guard-context.js';
+import { hooks } from './hooks.js';
+import { Scheduler } from './scheduler.js';
+
+const agents = new Map<string, { agent: Agent; unsubscribe: () => void }>();
+const REFRESH_FIRST: WakeReason[] = ['opened', 'updated', 'boot', 'keep'];
+
+export const scheduler = new Scheduler(async (intentId, reasons) => {
+  const entry = agents.get(intentId) ?? createEntry(intentId);
+  // Edges may not be computed yet for a new, edited or rehydrated intent.
+  if (REFRESH_FIRST.some((reason) => reasons.has(reason))) await refreshEdges(intentId);
+  const primary = REFRESH_FIRST.find((reason) => reasons.has(reason)) ?? [...reasons][0] ?? 'edges';
+  const { closed } = await entry.agent.wake(primary);
+  if (closed) destroyAgent(intentId);
+});
+
+function createEntry(intentId: string): { agent: Agent; unsubscribe: () => void } {
+  const agent = new Agent(intentId, (reason) => scheduler.wake(intentId, reason));
+  const unsubscribe = bus.subscribe(intentId, (env) => agent.onMessage(env));
+  const entry = { agent, unsubscribe };
+  agents.set(intentId, entry);
+  return entry;
+}
+
+export function ensureAgent(intentId: string): Agent {
+  return (agents.get(intentId) ?? createEntry(intentId)).agent;
+}
+
+export function getAgent(intentId: string): Agent | undefined {
+  return agents.get(intentId)?.agent;
+}
+
+export function destroyAgent(intentId: string): void {
+  agents.get(intentId)?.unsubscribe();
+  agents.delete(intentId);
+}
+
+export function agentCount(): number {
+  return agents.size;
+}
+
+export async function rehydrate(): Promise<number> {
+  hooks.resetNegotiation();
+  const open = await getIntentRepository().listOpen();
+  for (const intent of open) {
+    ensureAgent(intent.id);
+    scheduler.wake(intent.id, 'boot');
+  }
+  return open.length;
+}
+
+const onOpened = ({ intentId }: { intentId: string }): void => {
+  ensureAgent(intentId);
+  scheduler.wake(intentId, 'opened');
+};
+const onUpdated = ({ intentId }: { intentId: string }): void => scheduler.wake(intentId, 'updated');
+const onClosed = ({ intentId }: { intentId: string }): void => scheduler.wake(intentId, 'closed');
+const onEdges = ({ intentId }: { intentId: string }): void => scheduler.wake(intentId, 'edges');
+
+let started = false;
+
+export async function startRuntime(options: { rehydrate?: boolean } = {}): Promise<void> {
+  if (started) return;
+  started = true;
+  bus.setGuardContext(buildGuardContext);
+  events.on('intent.opened', onOpened);
+  events.on('intent.updated', onUpdated);
+  events.on('intent.closed', onClosed);
+  events.on('edges.changed', onEdges);
+  if (options.rehydrate !== false) await rehydrate();
+}
+
+export function stopRuntime(): void {
+  started = false;
+  events.off('intent.opened', onOpened);
+  events.off('intent.updated', onUpdated);
+  events.off('intent.closed', onClosed);
+  events.off('edges.changed', onEdges);
+  scheduler.stop();
+  for (const id of [...agents.keys()]) destroyAgent(id);
+}
