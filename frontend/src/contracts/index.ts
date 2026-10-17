@@ -9,6 +9,24 @@ export const itemSchema = z.object({
   flex: z.enum(['firm', 'flexible']).optional(),
 });
 
+export const parsedIntentSchema = z.object({
+  give: z.array(itemSchema),
+  want: z.array(z.object({ anyOf: z.array(itemSchema) })),
+  deadline: z.string().nullable(),
+  minNetCents: z.number().nullable(),
+  declaredNetCents: z.number().nullable(),
+  separateOrTogether: z.enum(['separate', 'together']).nullable(),
+  injectionSuspected: z.boolean(),
+  injectionReason: z.string().nullable(),
+});
+
+export const draftSchema = z.object({
+  id: z.string(),
+  parsed: parsedIntentSchema,
+  missing: z.array(z.string()),
+  question: z.string().nullable(),
+});
+
 export const wantItemSchema = z.object({
   anyOf: z.array(itemSchema),
 });
@@ -20,8 +38,6 @@ export const intentPublicSchema = z.object({
   tier: z.string(),
   give: z.array(itemSchema),
   want: z.array(wantItemSchema),
-  location: z.object({ lat: z.number(), lng: z.number() }).nullable(),
-  radiusKm: z.number().nonnegative(),
   deadline: z.string().nullable(),
   freeText: z.string(),
 });
@@ -112,8 +128,6 @@ export type Arrangement = z.infer<typeof arrangementSchema>;
 export type BusBody = z.infer<typeof busBodySchema>;
 export type Envelope = z.infer<typeof envelopeSchema>;
 
-export const DEFAULT_RADIUS_KM = 4.8;
-export const COARSE_GRID_M = 500;
 export const SEARCH_BUDGET_EXPANSIONS = 200;
 export const SEARCH_BUDGET_MS = 5000;
 export const NEGOTIATION_ROUNDS = 3;

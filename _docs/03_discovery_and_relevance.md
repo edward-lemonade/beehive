@@ -6,7 +6,7 @@ Goal: for any Open intent, find its neighborhood, decide which intents are direc
 
 ## Module API (`discovery/`)
 ```ts
-getNeighborhood(intentId): IntentPublic[]          // same community, Open, not own, radius-compatible
+getNeighborhood(intentId): IntentPublic[]          // same community, Open, not own
 itemMatch(given: Item, wanted: WantItem): boolean
 directlyRelevant(x: IntentPublic, y: IntentPublic): RelevantEdge | null
 refreshEdges(intentId): RelevantEdge[]             // runs the above, writes notices, emits edges.changed
@@ -17,11 +17,11 @@ detectNearMisses(intentId): NearMiss[]
 RelevantEdge { self: IntentId, other: IntentId, otherVersion: number,
                selfWants: EdgeCover[],   // items other can give me
                selfGives: Flow[] }       // items I can give other
-NearMiss     { otherHandle: string, gapCents: number, kind: 'price'|'dates'|'location', text: string }
+NearMiss     { otherHandle: string, gapCents: number, kind: 'price'|'dates', text: string }
 ```
 
 ## Rules
-- **Neighborhood:** Open, not the agent's own user, community match, and radius-compatible: `haversine(coarseA, coarseB) <= min(radiusA, radiusB)`. If either is location-free, skip the distance check. Query with a bounding box on `lat, lng` first, then compute haversine in code.
+- **Neighborhood:** Open, not the agent's own user, and in the same community. Location and radius are not part of the current intent model, so discovery does not apply geographic filtering.
 - **Directly relevant (Spec 4):** ignoring cash, some item in Y's Give satisfies some item in X's Want, or the reverse. Cash alone never counts.
 - **Item match:** `kind` equal, `label` equal after normalization, and every attr in the wanted item is satisfied by the given item. Equal for strings and numbers. For sublets, `dateStart`/`dateEnd` use containment (wanted range inside offered range). The given `qty` must be at least the wanted `qty` for a single flow. Splitting a quantity across several providers is handled in slice 04.
 - **No LLM here.** Matching is structured and deterministic. Free text is never read.
@@ -39,20 +39,19 @@ NearMiss     { otherHandle: string, gapCents: number, kind: 'price'|'dates'|'loc
 Computed during the relevance filter from public parts only:
 - Same items match but declared cash does not: `price`. Example text: "Closest ticket I found is $315, you're at $300."
 - Sublet items match on everything except partial date overlap: `dates`.
-- Items match and price works but radius fails: `location`.
 Rules:
 - Text never includes handles, names, or free text. Use handle only in structured fields.
 - Return the single nearest miss per kind, not a list.
-- Used by slice 08 for one "nothing I can assemble" SMS and by the map side panel in slice 09 (`GET /intents/:id/near-misses`).
+- Used by slice 08 for one "nothing I can assemble" SMS and by the public intent feed side panel in slice 09 (`GET /intents/:id/near-misses`).
 - Rate limit per intent (1 per 24 simulated hours unless the gap changes).
 
 ## Routes
 - `GET /intents/:id/near-misses` returns the caller's near misses for one of their own intents.
-- `GET /intents/:id/relevant` returns `{ relevant: boolean, ownIntentId: string|null }` for a bubble the caller is viewing. True only if that intent is directly relevant to one of the caller's Open intents. It returns nothing else about the bubble. The map (slice 09) uses it to show or hide "Message their agent".
+- `GET /intents/:id/relevant` returns `{ relevant: boolean, ownIntentId: string|null }` for a public intent the caller is viewing. True only if that intent is directly relevant to one of the caller's Open intents. It returns nothing else about the intent. The public feed (slice 09) uses it to show or hide "Message their agent".
 
 ## Acceptance
 - Seeded S1 setup: A (wants ticket1, pays cash), B (gives ticket1, wants ticket2), C (gives ticket2, wants cash). A and C are never marked relevant to each other. B is relevant to both.
-- A far-away seller with a matching item is excluded by radius.
+- Sellers with matching items are not geographically filtered in the current version.
 - A buyer and seller of the same item are not "relevant" through cash alone: a cash-only buyer (cash give, want ticket) is relevant to a ticket seller, but two sellers of tickets are not relevant to each other.
 - Editing C's ticket label makes B's edge to C disappear on the next `edges.changed`.
 - `refreshEdges` on 200 seeded intents completes in under 500 ms.

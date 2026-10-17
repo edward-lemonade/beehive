@@ -21,7 +21,7 @@ Item         { kind: 'ticket'|'sublet'|'cash'|'other', label: string, attrs: Rec
                qty: number, amountCents?: number, flex?: 'firm'|'flexible' }   // amount/flex only for cash
 WantItem     { anyOf: Item[] }
 IntentPublic { intentId, version, ownerHandle, tier, give: Item[], want: WantItem[],
-               location: {lat,lng}|null, radiusKm: number, deadline: string|null, freeText: string }
+               deadline: string|null, freeText: string }
 IntentPrivate{ minNetCents: number|null, declaredNetCents: number|null }
 IntentState  'draft'|'open'|'done'|'withdrawn'|'expired'
 ```
@@ -58,7 +58,7 @@ Envelope = { id, from: IntentId|'coordinator', to: IntentId, sentAt, trace: { se
 
 ## Tables (Drizzle)
 - `users` id, clerk_id, handle, tier, phone, phone_verified, created_at
-- `intents` id, user_id, version, state, public jsonb, private jsonb, lat, lng, radius_km, deadline, created_at, updated_at
+- `intents` id, user_id, version, state, public jsonb, private jsonb, deadline, created_at, updated_at
 - `intent_versions` intent_id, version, public jsonb, private jsonb
 - `notices` observer_intent, intent, version, relevant bool, covers jsonb, PK (observer_intent, intent, version)
 - `signals` from_intent, to_intent, from_version, to_version, satisfiable, updated_at, PK (from_intent, to_intent)
@@ -70,7 +70,7 @@ Envelope = { id, from: IntentId|'coordinator', to: IntentId, sentAt, trace: { se
 - `sms_log` id, user_id, direction, body, provider_id, created_at (unique provider_id for dedupe)
 - `reply_codes` code, user_id, arrangement_id, kind, expires_at
 
-Indexes: `intents (state)`, `intents (lat, lng)`, `signals (to_intent)`, `arrangement_slots (intent_id)`.
+Indexes: `intents (state)`, `signals (to_intent)`, `arrangement_slots (intent_id)`.
 
 ## Acceptance
 - `npm run build` and `npm test` pass in `backend/` from a clean checkout, and `npm run build` passes in `frontend/`.

@@ -3,7 +3,7 @@
 Read this first. Every slice doc assumes it. The behavior spec is `intent-exchange-spec.md`; slice docs cite it as "Spec 6.x" or "Gn".
 
 ## What we are building
-Users post free-text intents. Agents (one per intent) find closed sets of directly relevant intents, negotiate per-link prices within private bounds, and ask each user to approve over SMS. A map shows every Open intent as a bubble. Sentry traces every agent wake-up and watches the privacy invariants.
+Users post free-text intents. Agents (one per intent) find closed sets of directly relevant intents, negotiate per-link prices within private bounds, and ask each user to approve over SMS. Location and map-based discovery are out of scope for the current intent flow. Sentry traces every agent wake-up and watches the privacy invariants.
 
 ## Stack
 
@@ -13,7 +13,7 @@ Users post free-text intents. Agents (one per intent) find closed sets of direct
 | DB | Postgres via Drizzle ORM | Supabase |
 | Frontend | Vite + React + TypeScript, react-leaflet | Vercel |
 | Auth | Clerk (JWT verified in API) | Clerk |
-| LLM | Vercel AI SDK (`ai`) with Anthropic provider, Zod structured output | API |
+| LLM | OpenAI-compatible chat API (Gemini/Groq free tiers or local Ollama), Zod-validated JSON | API |
 | Messaging | Photon Spectrum (`spectrum-ts`) | Render (same service) |
 | Monitoring | Sentry (`@sentry/node`, `@sentry/react`) | Sentry |
 
@@ -85,7 +85,7 @@ Parallel lanes once 01 is merged:
 7. **Code style:** TypeScript strict, Zod at every boundary, sparse comments, no refactors beyond the task.
 
 ## Env vars
-`DATABASE_URL`, `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `ANTHROPIC_API_KEY`, `LLM_MODEL_FAST`, `PHOTON_PROJECT_ID`, `PHOTON_PROJECT_SECRET`, `PHOTON_WEBHOOK_SECRET`, `CHANNEL` (`photon` or `terminal`), `SENTRY_DSN_API`, `TIME_SCALE`, `SEARCH_BUDGET_EXPANSIONS` (200), `SEARCH_BUDGET_MS` (5000), `NEGOTIATION_ROUNDS` (3), `DEFAULT_RADIUS_KM` (4.8), `COARSE_GRID_M` (500), `CAMPUS_CENTER_LAT`, `CAMPUS_CENTER_LNG`.
+`DATABASE_URL`, `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `LLM_BASE_URL`, `LLM_API_KEY` (optional for local Ollama), `LLM_MODEL_FAST`, `PHOTON_PROJECT_ID`, `PHOTON_PROJECT_SECRET`, `PHOTON_WEBHOOK_SECRET`, `CHANNEL` (`photon` or `terminal`), `SENTRY_DSN_API`, `TIME_SCALE`, `SEARCH_BUDGET_EXPANSIONS` (200), `SEARCH_BUDGET_MS` (5000), `NEGOTIATION_ROUNDS` (3).
 Web: `VITE_API_URL`, `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_SENTRY_DSN`.
 
 ## Not building

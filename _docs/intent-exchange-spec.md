@@ -3,6 +3,8 @@
 Working title. Name TBD.
 Status: draft 2 (decisions from review folded in), for further review. Scope: product behavior only. No implementation, no technology choices.
 
+**Current implementation scope:** location and radius are deferred. Intents do not collect or expose coordinates, and discovery does not apply geographic filtering. The location-related product behavior below is aspirational until a later scope restores it.
+
 How to read this doc
 - **[Assumed]** marks a place where I filled a hole with a default. Confirm or correct each one.
 - **(Gn)** points to an entry in section 9, "Gaps, loopholes, and decisions needed."
@@ -100,7 +102,7 @@ How to read this doc
 - **Tolerance** (private, optional): how far beyond the declared terms the user will go (for example "up to $20 more"). Unset means "ask me."
 - **Valuation** (private, optional): the user's dollar worth for non-cash items. Used only to rank arrangements and judge trade-offs.
 - **Atomic**: the whole intent is satisfied in one arrangement or not at all. Items on one side may come from, or go to, several different participants.
-- **Location and radius** (optional): where the handoff would happen and how far the user will travel. No location means location-free (for example a digital ticket transfer).
+- **Location and radius** (deferred): possible future handoff location and travel-distance preference.
 - **Deadline** (optional): the date after which the intent is pointless (for example the event date).
 - **Version**: every change to an intent creates a new version.
 - **Public part**: declared terms, location and radius, deadline, handle, reliability tier.
@@ -109,7 +111,7 @@ How to read this doc
 ### Discovery
 - **Notice**: a record that one agent has read a specific version of one intent. It is per (observer, intent, version). (G11)
 - **Known set**: the directly relevant intents an agent has noticed, at the versions it read. Intents judged not relevant are recorded as read but never used.
-- **Neighborhood**: the intents an agent is eligible to notice (same community, radius-compatible both ways, not its own). Being in the neighborhood does not make an intent relevant.
+- **Neighborhood**: the intents an agent is eligible to notice (same community, Open, not its own). Geographic filtering is deferred.
 - **Directly relevant**: intent Y is directly relevant to intent X if, ignoring cash, some item in Y's Give could satisfy some item in X's Want, or some item in X's Give could satisfy some item in Y's Want. Cash alone never makes two intents relevant. Cash settles only between counterparties, so a buyer has no reason to be relevant to a seller it does not trade an item with.
 - **Search**: looking for a closed set of directly relevant intents that includes the agent's own, using only its known set and the signals it has received.
 - **Signal**: a message from one agent to a directly relevant intent saying whether the sender is satisfiable with that intent's participation. It carries no identity or terms of any third party.
@@ -179,10 +181,10 @@ Draft -> Open (Searching / Dormant) -> arrangement Proposed
 - Essentials the agent must resolve before the draft can be confirmed:
   - what the user gives and wants, with quantities;
   - for tickets: event, ticket type, day;
-  - for sublets: location, dates, rent;
+  - for sublets: dates and rent;
   - any cash amount, and whether it is firm or flexible;
   - whether multiple units on one side are sold or bought separately or only together. The agent must always ask this when a side has more than one unit, because it decides atomicity: separate intents sell independently, while one intent clears as a whole.
-- Optional, asked at most once and never insisted on: tolerance, valuation, location and radius, deadline.
+- Optional, asked at most once and never insisted on: tolerance, valuation, deadline. Location and radius are deferred in the current implementation.
 - The agent shows the draft back in plain language. The user confirms, edits, or abandons.
 - Outcomes:
   - Confirmed: becomes Open.
@@ -221,7 +223,7 @@ Notes
 - Reading is how an agent judges whether an intent is directly relevant. An intent judged not relevant is recorded as read and then left alone: the agent does not pass it on, store it for chaining, or mention it to anyone. If it later gets a new version, a wake event makes the agent judge it again.
 
 **Neighborhood and compatibility**
-- An intent is in an agent's neighborhood if: it is in the same community, it is Open, it is not the agent's own, and the two intents are radius-compatible (each within the other's radius, or either has no location).
+- In the current implementation, an intent is in an agent's neighborhood if it is in the same community, is Open, and is not the agent's own. Geographic filtering is future work.
 - Optional baseline requirements (for example a minimum reliability tier) apply in both directions.
 - Relevance is judged separately from the neighborhood. An intent is directly relevant only if a non-cash item can flow between it and the agent's own intent (see terminology).
 
@@ -236,7 +238,7 @@ Notes
 - Each agent computes its own status from the signals of its directly relevant neighbors. It sends a signal only to those neighbors, and only about itself.
 - A signal is retracted the same way when a neighbor withdraws, declines, expires, or changes. Retraction propagates along relevance edges.
 - When every intent in a connected set is satisfiable with its neighbors in the set, the backend creates the arrangement record. Duplicates are one arrangement, identified by participants and intent versions.
-- Every pair that trades directly must be radius-compatible. Non-counterparties are never compared.
+- Future location-aware behavior: every pair that trades directly must be radius-compatible. Non-counterparties are never compared.
 
 **Passive participation**
 - Every participant answers the pre-check using only its own flows, its counterparties' handles, and what it needs to check radius. An intent can be included in an arrangement assembled by another agent (the hub), whether or not it is Dormant and whether or not its own agent ever read the other participants. Its agent answers the pre-check using only what the proposal gives it (its own flows, the handles involved, and what it needs to check radius), and its user is asked to approve like any other participant.
@@ -265,7 +267,7 @@ An arrangement is valid only if all of these hold:
 1. **Atomic satisfaction.** For every participating intent, every Give item is delivered and every Want item is received, in the stated quantities, within this arrangement.
 2. **Conservation.** Every item given by someone is received by someone in the arrangement. Cash balances to zero overall, and each cash flow runs between two counterparties (rule 13). The platform takes none.
 3. **No self-flow.** No item or cash flows from a user to themselves. A user may have several intents in one arrangement.
-4. **Compatibility.** Every pair of participants with a direct flow is radius-compatible. No intent is past its deadline, and the deadline leaves room for hand-off. (G18)
+4. **Compatibility.** (Future location-aware behavior) Every pair of participants with a direct flow is radius-compatible. No intent is past its deadline, and the deadline leaves room for hand-off. (G18)
 5. **Terms within bounds.** Each participant's terms are their declared terms or within their tolerance. Anything worse is a near miss, never proposed for approval.
 7. **Community and baseline.** All participants meet each other's baseline requirements.
 8. **Item match.** Every wanted item is matched to a given item by the item-match rule. Fuzzy matches are shown to the user for review. (G9)
@@ -450,15 +452,15 @@ Quiet hours apply to everything except time-critical messages. (G16)
 - Details unresolved: G3, G14.
 
 ### 6.17 Location and radius
-- Users are never asked for an address.
-- An intent has at most one location point. The user sets it by dropping a pin on the map, or by naming a place in text. The parser matches the name against a fixed list of campus landmarks, each with coordinates. [Assumed]
-- The exact point stays with its owner. Other users and agents see only a coarse point, rounded to a grid. Every distance check uses the coarse point.
-- Radius is a distance. If the user does not set one, the default applies.
-- Two intents are radius-compatible when the distance between their coarse points is at most the smaller of the two radii.
-- The check runs only between pairs that trade directly. Non-counterparties are never compared.
-- An intent with no handoff location (for example a digital ticket transfer) is marked location-free. The check is skipped whenever either side is location-free.
+Location and radius are deferred from the current implementation. Intents do not collect coordinates, and discovery does not filter by distance. This section describes possible future behavior only:
+- Users would never be asked for an address.
+- A user could set one location point with a map pin; place names would not be geocoded.
+- The exact point would stay with its owner. Other users and agents would see only a coarse point.
+- A user could set a distance radius, with a default if omitted.
+- Distance checks would run only between pairs that trade directly.
 
 ### 6.18 Map UI
+The map is deferred with location support. The current UI scope is the public intent feed specified in `docs/09_map_ui.md`; the following map behavior is future work.
 - The map shows every Open intent in the user's community as a bubble at its coarse point. The bubble carries the intent's free text. Users can pan, zoom, and browse freely.
 - A bubble shows the free text (sanitized and labeled, G7), the handle, and the reliability tier. It never shows contact details or any private part.
 - Location-free intents have no point, so they appear in a separate strip beside the map.

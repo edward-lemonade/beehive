@@ -1,3 +1,4 @@
+import { verifyToken } from '@clerk/backend';
 import { config } from './config.js';
 import { ensureUserForClerkId } from './db/index.js';
 function parseBearer(tokenHeader) {
@@ -17,8 +18,17 @@ export const requireAuth = (() => {
         if (!token) {
             return c.json({ ok: false, error: 'Missing or invalid authorization token' }, 401);
         }
-        const issuer = (token.split('.').length >= 2 ? token.split('.')[1] : '').slice(0, 8) || 'dev';
-        const clerkId = `clerk_${issuer}`;
+        let clerkId;
+        try {
+            const claims = await verifyToken(token, { secretKey: config.CLERK_SECRET_KEY });
+            if (typeof claims.sub !== 'string' || claims.sub.length === 0) {
+                return c.json({ ok: false, error: 'Invalid authorization token' }, 401);
+            }
+            clerkId = claims.sub;
+        }
+        catch {
+            return c.json({ ok: false, error: 'Invalid authorization token' }, 401);
+        }
         const user = await ensureUserForClerkId(clerkId, {
             handle: stableHandle(clerkId),
             tier: 'new',
