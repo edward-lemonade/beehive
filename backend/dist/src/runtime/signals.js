@@ -14,6 +14,9 @@ export class PostgresSignalRepository {
     async to(intentId) {
         return (await sql `SELECT * FROM signals WHERE to_intent = ${intentId}`).map(toSignal);
     }
+    async all() {
+        return (await sql `SELECT * FROM signals`).map(toSignal);
+    }
     async upsert(s) {
         await sql `
       INSERT INTO signals (from_intent, to_intent, from_version, to_version, satisfiable, updated_at)
@@ -31,6 +34,9 @@ export class MemorySignalRepository {
     }
     async to(intentId) {
         return [...this.rows.values()].filter((r) => r.to === intentId);
+    }
+    async all() {
+        return [...this.rows.values()];
     }
     async upsert(signal) {
         this.rows.set(`${signal.from}>${signal.to}`, { ...signal });

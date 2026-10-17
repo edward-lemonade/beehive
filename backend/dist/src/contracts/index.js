@@ -80,10 +80,38 @@ export const linkSchema = z.object({
     amountCents: z.number().int().nullable(),
     state: z.enum(['unpriced', 'agreed', 'failed']),
 });
+export const approvalStateSchema = z.enum([
+    'queued', 'requested', 'approved', 'declined', 'timed_out', 'retracted', 'void', 'fulfilled',
+]);
 export const slotSchema = z.object({
     intentId: z.string(),
     intentVersion: z.number().int().nonnegative(),
-    approval: z.enum(['queued', 'requested', 'approved', 'declined', 'timed_out', 'retracted', 'void']),
+    approval: approvalStateSchema,
+});
+export const termsViewSchema = z.object({
+    arrangementId: z.string(),
+    revision: z.number().int().nonnegative(),
+    intentId: z.string(),
+    intentVersion: z.number().int().nonnegative(),
+    state: z.string(),
+    approval: approvalStateSchema,
+    expiresAt: z.number().nullable(),
+    gives: z.array(z.object({ item: itemSchema, toHandle: z.string() })),
+    gets: z.array(z.object({ item: itemSchema, fromHandle: z.string() })),
+    cashOut: z.array(z.object({ toHandle: z.string(), amountCents: z.number().int() })),
+    cashIn: z.array(z.object({ fromHandle: z.string(), amountCents: z.number().int() })),
+    netCents: z.number().int(),
+    declaredNetCents: z.number().int().nullable(),
+    grade: z.enum(['exact', 'within_tolerance']),
+    otherParticipants: z.number().int().nonnegative(),
+});
+export const checklistStepSchema = z.object({
+    id: z.string(),
+    kind: z.enum(['give', 'get', 'cash_out', 'cash_in']),
+    counterpartyHandle: z.string(),
+    contact: z.string().nullable(),
+    description: z.string(),
+    done: z.boolean(),
 });
 export const arrangementSchema = z.object({
     id: z.string(),

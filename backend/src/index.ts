@@ -8,6 +8,8 @@ import { installNegotiation } from './negotiation/session.js';
 import { negotiationRouter } from './negotiation/routes.js';
 import { startRuntime } from './runtime/registry.js';
 import { runtimeRouter } from './runtime/routes.js';
+import { arrangementsRouter } from './arrangements/routes.js';
+import { startCoordinator } from './arrangements/coordinator.js';
 import { startDiscovery } from './discovery/service.js';
 import { intentsRouter, publicMapRouter } from './intents/routes.js';
 
@@ -25,13 +27,16 @@ app.route('/intents', intentsRouter);
 app.route('/intents', discoveryRouter);
 app.route('/intents', runtimeRouter);
 app.route('/negotiate', negotiationRouter);
+app.route('/arrangements', arrangementsRouter);
 app.route('/map', publicMapRouter);
 
 installNegotiation();
 
 if (!process.env.VITEST) {
   startDiscovery();
-  startRuntime().catch((error) => console.error('runtime failed to start', error));
+  startRuntime()
+    .then(() => startCoordinator())
+    .catch((error) => console.error('runtime failed to start', error));
 }
 
 app.onError((err, c) => c.json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' }, 500));

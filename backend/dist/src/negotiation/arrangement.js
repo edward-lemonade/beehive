@@ -1,7 +1,7 @@
 import { events } from '../events.js';
 import { getIntentRepository } from '../intents/service.js';
 import { ensureAgent } from '../runtime/registry.js';
-import { deriveLinkBounds, linkBounds, pricingOrder, } from './pricing.js';
+import { deriveLinkBounds, linkBounds, pricingOrder, withinBounds, } from './pricing.js';
 import { runSession } from './session.js';
 const cashGiven = (i) => i.give.filter((x) => x.kind === 'cash').reduce((s, x) => s + (x.amountCents ?? 0) * x.qty, 0);
 const cashWanted = (i) => i.want.reduce((sum, w) => {
@@ -91,4 +91,51 @@ export async function priceArrangement(arrangement) {
     }
     events.emit('arrangement.priced', { arrangementId: arrangement.id });
     return { state: 'agreed', links };
+}
+// Re-runs one link of a priced arrangement with the others held fixed. `anchor` is the caller's target.
+export async function repriceLink(arrangement, linkId, anchor, attempt) {
+    const repo = getIntentRepository();
+    const intents = new Map();
+    for (const slot of arrangement.slots) {
+        const intent = await repo.get(slot.intentId);
+        if (!intent || intent.state !== 'open' || intent.version !== slot.intentVersion) {
+            return { state: 'failed', reason: 'stale' };
+        }
+        intents.set(intent.id, intent);
+    }
+    const all = [];
+    const priced = new Map();
+    for (const link of arrangement.links) {
+        if (!link.payer)
+            continue;
+        const receiverId = link.payer === link.a ? link.b : link.a;
+        all.push(termsFor(link, intents.get(link.payer), intents.get(receiverId)));
+        if (link.id !== linkId && link.amountCents !== null)
+            priced.set(link.id, link.amountCents);
+    }
+    const target = all.find((t) => t.link.id === linkId);
+    if (!target)
+        return { state: 'failed', reason: 'no_cash_link' };
+    const payer = intents.get(target.payer);
+    const receiver = intents.get(target.receiver);
+    const payerBounds = deriveLinkBounds(partyOf(payer), target, all, priced);
+    const receiverBounds = deriveLinkBounds(partyOf(receiver), target, all, priced);
+    if (!withinBounds(anchor.side, anchor.cents, anchor.side === 'payer' ? payerBounds : receiverBounds)) {
+        return { state: 'failed', reason: 'needs_bound_change' };
+    }
+    const bounds = linkBounds(target, payerBounds, receiverBounds, anchor.side === 'payer'
+        ? { payerOpenCents: anchor.cents }
+        : { receiverAskCents: anchor.cents });
+    ensureAgent(payer.id);
+    ensureAgent(receiver.id);
+    const result = await runSession({
+        key: `${arrangement.id}/${linkId}/${attempt}`,
+        arrangementId: arrangement.id,
+        payerId: payer.id,
+        receiverId: receiver.id,
+        bounds,
+    });
+    return result.state === 'agreed' && result.amountCents !== undefined
+        ? { state: 'agreed', amountCents: result.amountCents }
+        : { state: 'failed', reason: result.reason ?? 'no_agreement' };
 }

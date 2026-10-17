@@ -12,6 +12,7 @@ export type StoredSignal = {
 export interface SignalRepository {
   from(intentId: string): Promise<StoredSignal[]>;
   to(intentId: string): Promise<StoredSignal[]>;
+  all(): Promise<StoredSignal[]>;
   upsert(signal: StoredSignal): Promise<void>;
 }
 
@@ -42,6 +43,10 @@ export class PostgresSignalRepository implements SignalRepository {
     return (await sql<SignalRow[]>`SELECT * FROM signals WHERE to_intent = ${intentId}`).map(toSignal);
   }
 
+  async all(): Promise<StoredSignal[]> {
+    return (await sql<SignalRow[]>`SELECT * FROM signals`).map(toSignal);
+  }
+
   async upsert(s: StoredSignal): Promise<void> {
     await sql`
       INSERT INTO signals (from_intent, to_intent, from_version, to_version, satisfiable, updated_at)
@@ -62,6 +67,10 @@ export class MemorySignalRepository implements SignalRepository {
 
   async to(intentId: string): Promise<StoredSignal[]> {
     return [...this.rows.values()].filter((r) => r.to === intentId);
+  }
+
+  async all(): Promise<StoredSignal[]> {
+    return [...this.rows.values()];
   }
 
   async upsert(signal: StoredSignal): Promise<void> {
