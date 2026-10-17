@@ -4,6 +4,8 @@ import { config } from './config.js';
 import { events } from './events.js';
 import { sseHub } from './sse/hub.js';
 import { discoveryRouter } from './discovery/routes.js';
+import { installNegotiation } from './negotiation/session.js';
+import { negotiationRouter } from './negotiation/routes.js';
 import { startRuntime } from './runtime/registry.js';
 import { runtimeRouter } from './runtime/routes.js';
 import { startDiscovery } from './discovery/service.js';
@@ -22,7 +24,10 @@ app.get('/stream', (c) => {
 app.route('/intents', intentsRouter);
 app.route('/intents', discoveryRouter);
 app.route('/intents', runtimeRouter);
+app.route('/negotiate', negotiationRouter);
 app.route('/map', publicMapRouter);
+
+installNegotiation();
 
 if (!process.env.VITEST) {
   startDiscovery();
