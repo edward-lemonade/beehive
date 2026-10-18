@@ -17,9 +17,6 @@ export function nextSuggestion(cents: number, role: Role): number {
   return Math.max(500, role === 'payer' ? cents - step : cents + step)
 }
 
-export const greeting = (): string =>
-  "Hi! I'm your agent. Add what you want to trade in the New intent box and I'll look for matches and negotiate for you."
-
 export function nothingFound(role: Role | null): string {
   if (role === 'receiver') return "I haven't found a buyer yet, and I'll keep watching. If you want a quicker deal, consider a lower price. Want me to update your listing?"
   if (role === 'payer') return "Nothing matches yet, and I'll keep watching. A slightly higher offer might get you more takers."

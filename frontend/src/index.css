@@ -2,33 +2,34 @@
 
 body {
   margin: 0;
-  background: #f4f5f2;
-  color: #0f172a;
+  background: #171717;
+  color: #e2e8f0;
   font-family: system-ui, sans-serif;
+  color-scheme: dark;
 }
 
 .dashboard-panel {
-  border: 1px solid rgb(15 23 42 / 8%);
+  border: 1px solid rgb(148 163 184 / 14%);
   border-radius: 20px;
-  box-shadow: 0 4px 20px rgb(15 23 42 / 4%);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
 }
 
 .panel-mine {
-  background: linear-gradient(180deg, #f3e4c9 0%, #fffaf0 100%);
+  background: linear-gradient(180deg, #57401f 0%, #3b3020 100%);
 }
 
 .panel-chat {
-  background: linear-gradient(180deg, #d7e9df 0%, #f5fff9 100%);
+  background: linear-gradient(180deg, #563821 0%, #3b2c20 100%);
 }
 
 .panel-feed {
-  background: linear-gradient(180deg, #dce5f3 0%, #f7faff 100%);
+  background: linear-gradient(180deg, #51401c 0%, #39301f 100%);
 }
 
 .intent-scroll {
   scrollbar-gutter: stable;
   scrollbar-width: thin;
-  scrollbar-color: #94a3b8 #ffffff60;
+  scrollbar-color: #475569 #ffffff0d;
 }
 
 .intent-scroll::-webkit-scrollbar {
@@ -36,12 +37,12 @@ body {
 }
 
 .intent-scroll::-webkit-scrollbar-track {
-  background: #ffffff60;
+  background: #ffffff0d;
   border-radius: 8px;
 }
 
 .intent-scroll::-webkit-scrollbar-thumb {
-  background: #94a3b8;
+  background: #475569;
   border-radius: 8px;
 }
 
@@ -50,18 +51,19 @@ body {
   width: 100%;
   min-height: 140px;
   resize: vertical;
-  border: 1px solid #cbd5e1;
+  border: 1px solid #8b7355;
   border-radius: 12px;
-  background: rgb(255 255 255 / 90%);
+  background: #403a33;
   padding: 12px 14px;
   font-size: 0.875rem;
   line-height: 1.6;
+  color: #e2e8f0;
 }
 
 .composer-submit {
   width: 100%;
   border-radius: 10px;
-  background: #0f172a;
+  background: #a16207;
   padding: 11px 16px;
   color: white;
   font-size: 0.875rem;
@@ -69,7 +71,7 @@ body {
 }
 
 .composer-submit:hover:not(:disabled) {
-  background: #1e293b;
+  background: #b45309;
 }
 
 .composer-submit:disabled {
@@ -82,7 +84,152 @@ button:not(:disabled) {
 
 button:focus-visible,
 textarea:focus-visible,
+input:focus-visible,
+select:focus-visible,
 .intent-scroll:focus-visible {
-  outline: 2px solid #047857;
+  outline: 2px solid #fbbf24;
   outline-offset: 3px;
+}
+
+header.bg-white\/90 {
+  background-color: rgb(38 38 38 / 96%);
+}
+
+[class~="bg-white"],
+[class~="bg-white/90"],
+[class~="bg-white/85"] {
+  background-color: #494139;
+}
+
+[class~="bg-white/85"] {
+  background-color: #3b82f6;
+  color: #ffffff;
+}
+
+[class~="bg-white/80"] {
+  background-color: rgb(55 55 55 / 94%);
+}
+
+[class~="bg-white/70"] {
+  background-color: rgb(55 55 55 / 82%);
+}
+
+[class~="bg-white/40"] {
+  background-color: rgb(64 53 39 / 82%);
+}
+
+[class~="bg-white/25"] {
+  background-color: rgb(64 53 39 / 65%);
+}
+
+[class~="bg-slate-100"] {
+  background-color: #564b3d;
+}
+
+[class~="bg-slate-200"] {
+  background-color: #665947;
+}
+
+[class~="bg-slate-900"] {
+  background-color: #79520f;
+}
+
+[class~="hover:bg-slate-100"]:hover,
+[class~="hover:bg-red-50"]:hover {
+  background-color: #4a4a4a;
+}
+
+[class~="bg-amber-50"] {
+  background-color: #3b2a14;
+}
+
+[class~="bg-amber-100"] {
+  background-color: #493316;
+}
+
+[class~="bg-emerald-50"] {
+  background-color: #55431f;
+}
+
+[class~="bg-red-50"] {
+  background-color: #3f1d25;
+}
+
+[class~="bg-slate-950/35"] {
+  background-color: rgb(0 0 0 / 70%);
+}
+
+[class~="text-slate-900"] {
+  color: #f1f5f9;
+}
+
+[class~="text-slate-800"] {
+  color: #e2e8f0;
+}
+
+[class~="text-slate-700"],
+[class~="text-slate-600"] {
+  color: #cbd5e1;
+}
+
+[class~="text-slate-500"],
+[class~="text-slate-400"] {
+  color: #94a3b8;
+}
+
+[class~="hover:text-slate-800"]:hover {
+  color: #f1f5f9;
+}
+
+[class~="text-amber-900"],
+[class~="text-amber-800"] {
+  color: #fcd34d;
+}
+
+[class~="text-emerald-700"] {
+  color: #6ee7b7;
+}
+
+[class~="text-red-700"],
+[class~="text-red-600"] {
+  color: #fca5a5;
+}
+
+[class~="border-slate-200"],
+[class~="border-slate-300"] {
+  border-color: #796c5c;
+}
+
+[class~="border-slate-200/80"] {
+  border-color: rgb(82 82 82 / 78%);
+}
+
+[class~="border-white"],
+[class~="border-white/80"] {
+  border-color: rgb(148 163 184 / 22%);
+}
+
+[class~="border-amber-900/10"],
+[class~="border-amber-900/15"],
+[class~="border-emerald-900/10"],
+[class~="border-blue-900/10"],
+[class~="border-blue-900/15"] {
+  border-color: rgb(148 163 184 / 18%);
+}
+
+[class~="border-emerald-500"] {
+  border-color: #34d399;
+}
+
+input:not([type="checkbox"]),
+select,
+textarea {
+  border-color: #8b7355;
+  background-color: #403a33;
+  color: #e2e8f0;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #64748b;
 }

@@ -4,6 +4,7 @@ import { useApi } from '../api/context'
 import type { Draft, MyIntent } from '../api/schemas'
 import { pollWhenDown, useLive } from '../hooks/liveContext'
 import { errorMessage, money } from '../lib/format'
+import { useSeedDataDialog } from '../useSeedDataDialog'
 
 function NearMisses({ intentId }: { intentId: string }) {
   const api = useApi()
@@ -25,6 +26,8 @@ function IntentRow({ intent, onDraft }: { intent: MyIntent; onDraft: (draft: Dra
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const deleteDialog = useRef<HTMLDialogElement>(null)
   const [text, setText] = useState(intent.public.freeText)
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['mine-intents'] })
@@ -39,53 +42,86 @@ function IntentRow({ intent, onDraft }: { intent: MyIntent; onDraft: (draft: Dra
   const keep = useMutation({ mutationFn: () => api.keepLooking(intent.id) })
   const error = save.error ?? withdraw.error ?? remove.error ?? reopen.error ?? keep.error
   const isOpen = intent.state === 'open'
+  useEffect(() => {
+    const dialog = deleteDialog.current
+    if (!dialog) return
+    if (confirmingDelete) dialog.showModal()
+    else dialog.close()
+  }, [confirmingDelete])
 
   return (
     <li className="relative rounded-lg border border-slate-200 bg-white/90 px-3 py-2 text-sm">
-      <button
-        aria-label="Delete intent"
-        title="Delete intent"
-        disabled={remove.isPending}
-        onClick={() => remove.mutate()}
-        className="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-md text-red-600 hover:bg-red-50 disabled:opacity-50"
-      >
-        <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
-          <path d="m4 4 8 8M12 4l-8 8" />
-        </svg>
-      </button>
-      <div className="flex items-center gap-2 pr-6">
-        <span className="rounded bg-slate-100 px-1.5 text-xs uppercase">{intent.state}</span>
-        <span className="text-xs text-slate-500">v{intent.version}</span>
-      </div>
-      {editing ? (
-        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} className="mt-2 w-full rounded border border-slate-300 p-2" />
-      ) : (
         <button
-          aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
-          title={expanded ? 'Collapse intent' : 'Show full intent'}
-          className={`mt-1 w-full wrap-break-word text-left text-sm leading-5 ${expanded ? 'whitespace-pre-wrap' : 'line-clamp-2'}`}
+          aria-label="Delete listing"
+          title="Delete listing"
+          disabled={remove.isPending}
+          onClick={() => setConfirmingDelete(true)}
+          className="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-md text-red-600 hover:bg-red-50 disabled:opacity-50"
         >
-          {intent.public.freeText}
+          <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+            <path d="m4 4 8 8M12 4l-8 8" />
+          </svg>
         </button>
-      )}
-      <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs">
-        {isOpen && !editing && <button onClick={() => setEditing(true)} className="rounded border border-slate-300 px-2 py-0.5">Edit</button>}
-        {editing && (
-          <>
-            <button disabled={save.isPending || !text.trim()} onClick={() => save.mutate()} className="rounded bg-slate-900 px-2 py-0.5 text-white disabled:opacity-50">Save</button>
-            <button onClick={() => { setEditing(false); setText(intent.public.freeText) }} className="rounded border border-slate-300 px-2 py-0.5">Cancel</button>
-          </>
+        <div className="flex items-center gap-2 pr-6">
+          <span className="rounded bg-slate-100 px-1.5 text-xs uppercase">{intent.state}</span>
+          <span className="text-xs text-slate-500">v{intent.version}</span>
+        </div>
+        {editing ? (
+          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} className="mt-2 w-full rounded border border-slate-300 p-2" />
+        ) : (
+          <button
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+            title={expanded ? 'Collapse listing' : 'Show full listing'}
+            className={`mt-1 w-full wrap-break-word text-left text-sm leading-5 ${expanded ? 'whitespace-pre-wrap' : 'line-clamp-2'}`}
+          >
+            {intent.public.freeText}
+          </button>
         )}
-        {isOpen && <button disabled={withdraw.isPending} onClick={() => withdraw.mutate()} className="rounded border border-slate-300 px-2 py-0.5 disabled:opacity-50">Withdraw</button>}
-        {isOpen && <button disabled={keep.isPending} onClick={() => keep.mutate()} className="rounded border border-slate-300 px-2 py-0.5 disabled:opacity-50">Push agent</button>}
-        {(intent.state === 'withdrawn' || intent.state === 'expired') && (
-          <button disabled={reopen.isPending} onClick={() => reopen.mutate()} className="rounded border border-slate-300 px-2 py-0.5 disabled:opacity-50">Reopen</button>
-        )}
-      </div>
-      {keep.isSuccess && <p className="mt-1 text-xs text-slate-500">Your agent is looking again.</p>}
-      {error && <p role="alert" className="mt-1 text-xs text-red-600">{errorMessage(error)}</p>}
-      {isOpen && <NearMisses intentId={intent.id} />}
+        <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs">
+          {isOpen && !editing && <button onClick={() => setEditing(true)} className="rounded border border-slate-300 px-2 py-0.5">Edit</button>}
+          {editing && (
+            <>
+              <button disabled={save.isPending || !text.trim()} onClick={() => save.mutate()} className="rounded bg-slate-900 px-2 py-0.5 text-white disabled:opacity-50">Save</button>
+              <button onClick={() => { setEditing(false); setText(intent.public.freeText) }} className="rounded border border-slate-300 px-2 py-0.5">Cancel</button>
+            </>
+          )}
+          {isOpen && <button disabled={withdraw.isPending} onClick={() => withdraw.mutate()} className="rounded border border-slate-300 px-2 py-0.5 disabled:opacity-50">Withdraw</button>}
+          {isOpen && <button disabled={keep.isPending} onClick={() => keep.mutate()} className="rounded border border-slate-300 px-2 py-0.5 disabled:opacity-50">Push agent</button>}
+          {(intent.state === 'withdrawn' || intent.state === 'expired') && (
+            <button disabled={reopen.isPending} onClick={() => reopen.mutate()} className="rounded border border-slate-300 px-2 py-0.5 disabled:opacity-50">Reopen</button>
+          )}
+        </div>
+        {keep.isSuccess && <p className="mt-1 text-xs text-slate-500">Your agent is looking again.</p>}
+        {error && <p role="alert" className="mt-1 text-xs text-red-600">{errorMessage(error)}</p>}
+        {isOpen && <NearMisses intentId={intent.id} />}
+        <dialog
+          ref={deleteDialog}
+          aria-labelledby={`delete-listing-title-${intent.id}`}
+          onClose={() => setConfirmingDelete(false)}
+          onCancel={() => setConfirmingDelete(false)}
+          className="m-auto w-[calc(100%_-_2rem)] max-w-sm rounded-2xl border border-slate-200 bg-white p-5 text-slate-900 shadow-xl backdrop:bg-slate-950/60"
+        >
+          <h2 id={`delete-listing-title-${intent.id}`} className="text-lg font-semibold">Delete this listing?</h2>
+          <p className="mt-2 text-sm text-slate-600">This can’t be undone.</p>
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setConfirmingDelete(false)}
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(undefined, { onSuccess: () => setConfirmingDelete(false) })}
+              className="rounded-lg bg-red-700 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {remove.isPending ? 'Deleting…' : 'Delete listing'}
+            </button>
+          </div>
+        </dialog>
     </li>
   )
 }
@@ -159,13 +195,9 @@ function NewIntent({ draft, setDraft }: { draft: Draft | null; setDraft: (draft:
 export function MyIntents() {
   const api = useApi()
   const [draft, setDraft] = useState<Draft | null>(null)
-  const [choosingSeed, setChoosingSeed] = useState(false)
+  const { open: choosingSeed, setOpen: setChoosingSeed } = useSeedDataDialog()
   const [scenarioId, setScenarioId] = useState('')
   const seedDialog = useRef<HTMLDialogElement>(null)
-  useEffect(() => {
-    if (choosingSeed) seedDialog.current?.showModal()
-    else seedDialog.current?.close()
-  }, [choosingSeed])
   const { up } = useLive()
   const queryClient = useQueryClient()
   const scenarios = useQuery({ queryKey: ['seed-options'], queryFn: () => api.seedOptions(), enabled: choosingSeed })
@@ -178,22 +210,21 @@ export function MyIntents() {
       void queryClient.invalidateQueries({ queryKey: ['arrangements'] })
     },
   })
+  useEffect(() => {
+    if (choosingSeed) seedDialog.current?.showModal()
+    else seedDialog.current?.close()
+  }, [choosingSeed])
   const query = useQuery({ queryKey: ['mine-intents'], queryFn: () => api.myIntents(), refetchInterval: pollWhenDown(up) })
   return (
-    <section aria-label="Your intents" className="dashboard-panel panel-mine flex h-full min-h-0 flex-col">
+    <section aria-label="Your listings" className="dashboard-panel panel-mine flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-amber-900/10 px-4 py-4">
-        <h2 className="text-lg font-semibold">Your intents</h2>
-        {import.meta.env.DEV && (
-          <button disabled={seed.isPending} aria-haspopup="dialog" aria-controls="seed-picker" onClick={() => { seed.reset(); setChoosingSeed(true) }} className="rounded-lg border border-amber-900/15 bg-white/70 px-2 py-1 text-xs disabled:opacity-50">
-            {seed.isPending ? 'Loading…' : 'Load seed data'}
-          </button>
-        )}
+        <h2 className="text-lg font-semibold">Your listings</h2>
       </div>
       <dialog
         ref={seedDialog}
         id="seed-picker"
         aria-labelledby="seed-picker-title"
-        onClose={() => setChoosingSeed(false)}
+        onClose={() => { setChoosingSeed(false); seed.reset() }}
         onCancel={(event) => { if (seed.isPending) event.preventDefault() }}
         className="m-auto w-[calc(100%_-_2rem)] max-w-sm rounded-2xl border border-slate-200 bg-white p-5 text-slate-900 shadow-xl backdrop:bg-slate-950/35 backdrop:backdrop-blur-sm"
       >
@@ -228,7 +259,7 @@ export function MyIntents() {
           )}
         </form>
       </dialog>
-      <div role="region" aria-label="Your intent list" tabIndex={0} className="intent-scroll mx-3 my-3 min-h-0 flex-1 overflow-y-scroll rounded-xl border border-amber-900/15 bg-white/25 p-2">
+      <div role="region" aria-label="Your listing list" tabIndex={0} className="intent-scroll mx-3 my-3 min-h-0 flex-1 overflow-y-scroll rounded-xl border border-amber-900/15 bg-white/25 p-2">
       {query.isError && <p role="alert" className="text-sm text-red-600">{errorMessage(query.error)}</p>}
       {query.data?.length === 0 && <p className="text-sm text-slate-500">Nothing posted yet.</p>}
       <ul className="space-y-1.5">{query.data?.map((intent) => <IntentRow key={intent.id} intent={intent} onDraft={setDraft} />)}</ul>

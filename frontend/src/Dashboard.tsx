@@ -4,7 +4,7 @@ import { LiveProvider } from './hooks/live'
 import { AgentChat } from './panels/AgentChat'
 import { MyIntents } from './panels/MyIntents'
 
-const tabs = ['Mine', 'Agent', 'Feed'] as const
+const tabs = ['Agent', 'Your listings', 'Other listings'] as const
 type Tab = (typeof tabs)[number]
 
 function Layout() {
@@ -25,14 +25,14 @@ function Layout() {
           </button>
         ))}
       </nav>
-      <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.65fr)_minmax(0,1fr)] lg:gap-5">
-        <div className={`${show('Mine')} h-[calc(100dvh-12rem)] min-h-[480px] lg:h-auto lg:min-h-0`}>
-          <MyIntents />
-        </div>
+      <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)_minmax(0,1fr)] lg:gap-5">
         <div className={`${show('Agent')} h-[calc(100dvh-12rem)] min-h-[480px] lg:h-auto lg:min-h-0`}>
           <AgentChat />
         </div>
-        <div className={`${show('Feed')} lg:min-h-0`}>
+        <div className={`${show('Your listings')} h-[calc(100dvh-12rem)] min-h-[480px] lg:h-auto lg:min-h-0`}>
+          <MyIntents />
+        </div>
+        <div className={`${show('Other listings')} lg:min-h-0`}>
           <PublicIntents />
         </div>
       </div>

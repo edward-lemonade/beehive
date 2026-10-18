@@ -88,17 +88,18 @@ export function PublicIntents() {
   const publicQuery = useQuery({ queryKey: ['public'], queryFn: () => api.publicIntents(), refetchInterval: pollWhenDown(up) })
   const mine = useQuery({ queryKey: ['mine-intents'], queryFn: () => api.myIntents(), refetchInterval: pollWhenDown(up) })
   const ownIds = new Set((mine.data ?? []).map((i) => i.id))
+  const otherListings = publicQuery.data?.filter((intent) => !ownIds.has(intent.intentId))
 
   return (
-    <section aria-label="Public intents" className="dashboard-panel panel-feed flex h-[calc(100dvh-12rem)] min-h-[480px] flex-col lg:h-full lg:min-h-0">
-      <h2 className="shrink-0 border-b border-blue-900/10 px-4 py-4 text-lg font-semibold">Open intents</h2>
-      <div role="region" aria-label="Open intent list" tabIndex={0} className="intent-scroll mx-3 my-3 min-h-0 flex-1 overflow-y-scroll rounded-xl border border-blue-900/15 bg-white/25 p-2">
+    <section aria-label="Other listings" className="dashboard-panel panel-feed flex h-[calc(100dvh-12rem)] min-h-[480px] flex-col lg:h-full lg:min-h-0">
+      <h2 className="shrink-0 border-b border-blue-900/10 px-4 py-4 text-lg font-semibold">Other listings</h2>
+      <div role="region" aria-label="Other listings list" tabIndex={0} className="intent-scroll mx-3 my-3 min-h-0 flex-1 overflow-y-scroll rounded-xl border border-blue-900/15 bg-white/25 p-2">
       {publicQuery.isPending && <p className="text-sm text-slate-500">Loading…</p>}
       {publicQuery.isError && <p role="alert" className="text-sm text-red-600">{errorMessage(publicQuery.error)}</p>}
-      {publicQuery.data?.length === 0 && <p className="text-sm text-slate-500">No open intents yet.</p>}
+      {otherListings?.length === 0 && <p className="text-sm text-slate-500">No other listings yet.</p>}
       <ul className="space-y-1.5">
-        {publicQuery.data?.map((intent) => (
-          <IntentCard key={intent.intentId} intent={intent} own={ownIds.has(intent.intentId)} />
+        {otherListings?.map((intent) => (
+          <IntentCard key={intent.intentId} intent={intent} own={false} />
         ))}
       </ul>
       </div>
