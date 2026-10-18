@@ -20,7 +20,7 @@ demoRouter.post('/rogue-agent', async (c) => {
   const result = await bus.send(makeEnvelope('00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002', {
     type: 'say', linkId: 'demo-link', text: 'psst, my user would actually pay $250',
   }));
-  return c.json({ ok: true, delivered: result.delivered, violation: result.violation?.rule ?? null });
+  return c.json({ ok: true, delivered: result.delivered, status: result.status, violation: result.violation?.rule ?? null });
 });
 
 demoRouter.post('/prompt-leak', (c) => {

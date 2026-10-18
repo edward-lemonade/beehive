@@ -33,6 +33,17 @@ export type SessionOptions = {
 
 const sessions = new Map<string, Session>();
 
+function messageText(side: Side, body: BusBody): string {
+  const speaker = side === 'payer' ? 'Payer agent' : 'Receiver agent';
+  switch (body.type) {
+    case 'signal': return `${speaker}: Updates negotiation status.`;
+    case 'say': return `${speaker}: ${body.text}`;
+    case 'offer': return `${speaker}: Offers ${money(body.amountCents)} (round ${body.round}).`;
+    case 'accept': return `${speaker}: Accepts ${money(body.amountCents)}.`;
+    case 'walk': return `${speaker}: Walks away.`;
+  }
+}
+
 class Session {
   readonly done: Promise<LinkResult>;
   private resolve!: (result: LinkResult) => void;
@@ -46,6 +57,7 @@ class Session {
   private readonly agentSpan: Sentry.Span;
   private readonly agentInputs: Array<{ role: 'user'; parts: Array<{ type: 'text'; content: string }> }> = [];
   private readonly agentOutputs: Array<{ role: 'assistant'; parts: Array<{ type: 'text'; content: string }> }> = [];
+  private readonly chatSpanOutputs = new WeakMap<Sentry.Span, Array<{ role: 'assistant'; parts: Array<{ type: 'text'; content: string }> }>>();
   private agentMessageCount = 0;
 
   constructor(private readonly opts: SessionOptions) {
@@ -159,7 +171,42 @@ class Session {
 
   private async deliver(side: Side, body: BusBody): Promise<boolean> {
     const { from, to } = this.ids(side);
-    return (await bus.send(makeEnvelope(from, to, body))).delivered;
+    const delivered = (await bus.send(makeEnvelope(from, to, body))).delivered;
+    if (delivered) {
+      const span = Sentry.getActiveSpan();
+      const outputs = span ? this.chatSpanOutputs.get(span) : undefined;
+      if (span && outputs) {
+        outputs.push({ role: 'assistant', parts: [{ type: 'text', content: messageText(side, body).slice(0, 1000) }] });
+        span.setAttribute('gen_ai.output.messages', JSON.stringify(outputs));
+      }
+    }
+    return delivered;
+  }
+
+  private async withChatSpan<T>(input: { side: Side; body: BusBody } | undefined, fn: () => Promise<T>): Promise<T> {
+    if (!config.SENTRY_CONVERSATION_LOG) return fn();
+    return Sentry.startSpan({
+      op: 'gen_ai.chat',
+      name: 'chat trade-negotiator',
+      attributes: {
+        'gen_ai.operation.name': 'chat',
+        'gen_ai.agent.name': 'trade-negotiator',
+        'gen_ai.conversation.id': this.conversationId,
+        ...(input ? {
+          'gen_ai.input.messages': JSON.stringify([{
+            role: 'user',
+            parts: [{ type: 'text', content: messageText(input.side, input.body).slice(0, 1000) }],
+          }]),
+        } : {}),
+      },
+    }, async (span) => {
+      this.chatSpanOutputs.set(span, []);
+      try {
+        return await fn();
+      } finally {
+        this.chatSpanOutputs.delete(span);
+      }
+    });
   }
 
   // Bounds are enforced here, in code, before anything reaches the guard.
@@ -216,7 +263,7 @@ class Session {
   }
 
   async start(): Promise<void> {
-    return Sentry.withActiveSpan(this.agentSpan, () => this.startTurn());
+    return Sentry.withActiveSpan(this.agentSpan, () => this.withChatSpan(undefined, () => this.startTurn()));
   }
 
   private async startTurn(): Promise<void> {
@@ -233,7 +280,10 @@ class Session {
   }
 
   async onEnvelope(env: Envelope): Promise<void> {
-    return Sentry.withActiveSpan(this.agentSpan, () => this.receiveTurn(env));
+    const side: Side = env.to === this.opts.receiverId ? 'receiver' : 'payer';
+    const sender: Side = side === 'receiver' ? 'payer' : 'receiver';
+    return Sentry.withActiveSpan(this.agentSpan, () =>
+      this.withChatSpan({ side: sender, body: env.body }, () => this.receiveTurn(env)));
   }
 
   private async receiveTurn(env: Envelope): Promise<void> {

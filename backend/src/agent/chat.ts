@@ -12,6 +12,7 @@ import { canaryInstruction, detectPromptLeak, reportInjection, scanForInjection 
 import { Sentry, metric } from '../observability/telemetry.js';
 import { config } from '../config.js';
 import { ensureAgent, scheduler } from '../runtime/registry.js';
+import { bus } from '../runtime/bus.js';
 
 export type ChatTurn = { from: 'agent' | 'me'; text: string };
 export type AgentUser = { id: string; handle: string; tier: string; imageUrl?: string | null };
@@ -109,7 +110,14 @@ Actions:
 
 When you are told about an EVENT, there is no user approval. For intent_posted you may contact agents as described above; for other events set action to null and explain the current situation in your own words using CONTEXT.`;
 
-type Ctx = { own: Array<{ id: string; state: string; text: string; limit: number | null }>; others: Array<{ id: string; handle: string; text: string }>; arrangements: string[]; arrangementIds: Set<string>; conversation: string[] };
+type Ctx = {
+  own: Array<{ id: string; state: string; text: string; limit: number | null }>;
+  others: Array<{ id: string; handle: string; text: string }>;
+  arrangements: string[];
+  arrangementIds: Set<string>;
+  conversation: string[];
+  communicationEvidence: { outbound: Array<'enqueued'>; inbound: Array<'enqueued'> };
+};
 
 // With several priced or unpriced cash lines there is no single "the price", so shortcuts keyed on it must not fire.
 function singlePrice(t: TermsView | undefined): number | undefined {
@@ -202,6 +210,10 @@ async function buildContext(userId: string): Promise<Ctx> {
       return `${identity}${termsLine(t)}${status}`;
     })),
     arrangementIds: new Set(live.map((a) => a.terms.arrangementId)),
+    communicationEvidence: {
+      outbound: entries.filter((entry) => mineIds.has(entry.from)).map(() => 'enqueued' as const),
+      inbound: entries.filter((entry) => mineIds.has(entry.to)).map(() => 'enqueued' as const),
+    },
   };
 }
 
@@ -439,6 +451,19 @@ async function runAgentChatTurn(input: AgentChatInput): Promise<AgentChatResult>
   if (!reply) throw new Error('Agent produced no reply');
 
   const promptLeak = detectPromptLeak(reply, 'agent.chat', user.id);
+  const ownIntentIds = new Set(ctx.own.map((intent) => intent.id));
+  const communicationEvidence = {
+    outbound: [...ctx.communicationEvidence.outbound] as Array<'enqueued' | 'processed' | 'failed'>,
+    inbound: [...ctx.communicationEvidence.inbound] as Array<'enqueued' | 'processed' | 'failed'>,
+  };
+  for (const entry of bus.log) {
+    if (entry.type === 'signal') continue;
+    const direction = ownIntentIds.has(entry.from) ? 'outbound' : ownIntentIds.has(entry.to) ? 'inbound' : undefined;
+    if (!direction) continue;
+    const status = entry.status === 'processed' ? 'processed'
+      : entry.status === 'enqueued' ? 'enqueued' : 'failed';
+    communicationEvidence[direction].push(status);
+  }
   recordChatEval({
     reply,
     groundingText: messages.map((m) => m.content).join('\n'),
@@ -448,6 +473,7 @@ async function runAgentChatTurn(input: AgentChatInput): Promise<AgentChatResult>
     promptLeak,
     userInjection,
     flaggedListingsInContext,
+    communicationEvidence,
   }, { trigger: input.event ? 'event' : 'message', userId: user.id });
   if (promptLeak) reply = "Sorry, I can't share that. Want me to keep looking for trades instead?";
   return { reply, draft: null, changed };

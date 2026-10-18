@@ -12,13 +12,19 @@ export type BusLogEntry = {
   from: string;
   to: string;
   type: string;
+  linkId?: string;
   delivered: boolean;
+  status: 'guard_rejected' | 'handler_missing' | 'enqueued' | 'processed' | 'processing_failed';
   violation?: Violation['rule'];
   body?: BusBody;
 };
 
 export type GuardContextProvider = (env: Envelope) => Promise<GuardContext>;
-export type SendResult = { delivered: boolean; violation?: Violation };
+export type SendResult = {
+  delivered: boolean;
+  status: 'guard_rejected' | 'handler_missing' | 'enqueued';
+  violation?: Violation;
+};
 type Handler = (env: Envelope) => void | Promise<void>;
 
 const LOG_LIMIT = 5000;
@@ -55,38 +61,93 @@ export class Bus {
 
   // Drop and report on violation; never sanitize and send.
   async send(env: Envelope): Promise<SendResult> {
-    if (!this.provider) throw new Error('Bus guard context is not configured');
-    const result = guard(env, await this.provider(env));
-    const entry: BusLogEntry = {
-      id: env.id, at: Date.now(), from: String(env.from), to: String(env.to),
-      type: String(env.body?.type), delivered: result.ok,
-    };
-    if (logContent()) entry.body = env.body;
-    if (!result.ok) {
-      entry.violation = result.violation.rule;
-      this.record(entry);
-      runtimeStats.violations += 1;
-      for (const listener of this.violationListeners) listener(result.violation, env);
-      return { delivered: false, violation: result.violation };
-    }
-    this.record(entry);
+    const type = String(env.body?.type);
+    return Sentry.startSpan({
+      op: 'bus.send',
+      name: `send ${type}`,
+      attributes: {
+        'messaging.message.id': env.id,
+        'bus.message_id': env.id,
+        'bus.message_type': type,
+        'bus.from': String(env.from),
+        'bus.to': String(env.to),
+        ...(env.body?.type === 'signal' ? {
+          'bus.from_version': env.body.fromVersion,
+          'bus.to_version': env.body.toVersion,
+          'bus.satisfiable': env.body.satisfiable,
+        } : {}),
+        ...(env.body.type !== 'signal' ? { 'bus.link_id': env.body.linkId } : {}),
+      },
+    }, async (sendSpan) => {
+      if (!this.provider) throw new Error('Bus guard context is not configured');
+      const result = guard(env, await this.provider(env));
+      if (!result.ok) {
+        const entry: BusLogEntry = {
+          id: env.id, at: Date.now(), from: String(env.from), to: String(env.to),
+          type, ...(env.body.type !== 'signal' ? { linkId: env.body.linkId } : {}),
+          delivered: false, status: 'guard_rejected', violation: result.violation.rule,
+        };
+        if (logContent()) entry.body = env.body;
+        this.record(entry);
+        sendSpan.setAttributes({ 'bus.delivery.status': entry.status, 'bus.guard.violation': result.violation.rule });
+        runtimeStats.violations += 1;
+        for (const listener of this.violationListeners) listener(result.violation, env);
+        return { delivered: false, status: 'guard_rejected', violation: result.violation };
+      }
 
-    const handler = this.handlers.get(env.to);
-    if (handler) {
+      const handler = this.handlers.get(env.to);
+      const entry: BusLogEntry = {
+        id: env.id, at: Date.now(), from: String(env.from), to: String(env.to),
+        type, ...(env.body.type !== 'signal' ? { linkId: env.body.linkId } : {}),
+        delivered: Boolean(handler), status: handler ? 'enqueued' : 'handler_missing',
+      };
+      if (logContent()) entry.body = env.body;
+      this.record(entry);
+      sendSpan.setAttribute('bus.delivery.status', entry.status);
+      if (!handler) return { delivered: false, status: 'handler_missing' };
+
+      const sendTrace = traceHeaders();
+      const queuedAt = performance.now();
       const previous = this.queues.get(env.to) ?? Promise.resolve();
       const next = previous
-        .then(() => continueFrom(env.trace, () => Sentry.startSpan({
+        .then(() => new Promise<void>((resolve) => setImmediate(resolve)))
+        .then(() => continueFrom(sendTrace.sentryTrace ? sendTrace : env.trace, () => Sentry.startSpan({
           op: 'agent.receive',
           name: `receive ${String(env.body?.type)}`,
-          attributes: { 'bus.message_type': String(env.body?.type), 'bus.from': String(env.from), 'bus.to': String(env.to) },
-        }, () => handler(result.envelope))))
-        .catch((error) => console.error('bus handler failed', env.to, error));
+          attributes: {
+            'messaging.message.id': env.id,
+            'bus.message_id': env.id,
+            'bus.message_type': type,
+            'bus.from': String(env.from),
+            'bus.to': String(env.to),
+            'bus.delivery.status': 'processing',
+            'bus.queue.delay_ms': Math.max(0, performance.now() - queuedAt),
+            ...(env.body?.type === 'signal' ? {
+              'bus.from_version': env.body.fromVersion,
+              'bus.to_version': env.body.toVersion,
+              'bus.satisfiable': env.body.satisfiable,
+            } : {}),
+            ...(env.body.type !== 'signal' ? { 'bus.link_id': env.body.linkId } : {}),
+          },
+        }, async (receiveSpan) => {
+          try {
+            await handler(result.envelope);
+            entry.status = 'processed';
+            receiveSpan.setAttribute('bus.delivery.status', entry.status);
+          } catch (error) {
+            entry.status = 'processing_failed';
+            receiveSpan.setAttribute('bus.delivery.status', entry.status);
+            receiveSpan.setStatus({ code: 2, message: error instanceof Error ? error.message : 'handler_failed' });
+            Sentry.captureException(error);
+            console.error('bus handler failed', env.to, error);
+          }
+        })))
+        .finally(() => {
+          if (this.queues.get(env.to) === next) this.queues.delete(env.to);
+        });
       this.queues.set(env.to, next);
-      void next.finally(() => {
-        if (this.queues.get(env.to) === next) this.queues.delete(env.to);
-      });
-    }
-    return { delivered: true };
+      return { delivered: true, status: 'enqueued' };
+    });
   }
 
   async drain(): Promise<void> {

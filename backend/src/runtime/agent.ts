@@ -7,6 +7,7 @@ import { candidatesBySlot, localStatus } from '../engine/index.js';
 import { events } from '../events.js';
 import type { StoredIntent } from '../intents/repository.js';
 import { getIntentRepository } from '../intents/service.js';
+import { Sentry } from '../observability/telemetry.js';
 import { bus, makeEnvelope } from './bus.js';
 import { hooks } from './hooks.js';
 import { signalRepo, type StoredSignal } from './signals.js';
@@ -108,6 +109,19 @@ export class Agent {
   async onMessage(env: Envelope): Promise<void> {
     const body = env.body;
     if (body.type === 'signal') {
+      const repository = getIntentRepository();
+      const [sender, recipient] = await Promise.all([
+        repository.get(env.from),
+        repository.get(env.to),
+      ]);
+      Sentry.getActiveSpan()?.setAttributes({
+        'bus.sender.version_expected': body.fromVersion,
+        'bus.sender.version_observed': sender?.version ?? -1,
+        'bus.sender.version_matches': sender?.version === body.fromVersion,
+        'bus.receiver.version_expected': body.toVersion,
+        'bus.receiver.version_observed': recipient?.version ?? -1,
+        'bus.receiver.version_matches': recipient?.version === body.toVersion,
+      });
       await signalRepo().upsert({
         from: env.from,
         to: env.to,

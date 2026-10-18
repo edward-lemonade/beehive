@@ -11,9 +11,45 @@ export type ChatTurnTrace = {
   promptLeak: boolean;
   userInjection: boolean;
   flaggedListingsInContext: number;
+  communicationEvidence?: {
+    outbound: Array<'enqueued' | 'processed' | 'failed'>;
+    inbound: Array<'enqueued' | 'processed' | 'failed'>;
+  };
 };
 
 export type Grade = { name: string; pass: boolean; detail?: string };
+export type DesyncEval = { result: 'pass' | 'fail' | 'inconclusive'; detail?: string };
+
+const OUTBOUND_COMMUNICATION_CLAIM = /\b(?:i|we|my agent|our agent)\s+(?:(?:have|has|had|already|just|previously|['’]ve|['’]d)\s+)*(?:told|asked|messaged|contacted|notified|spoke|talked|reached out|sent|been in touch)\b/i;
+const INBOUND_COMMUNICATION_CLAIM = /\b(?:they|the other agent|@[\w.-]+)\s+(?:(?:have|has|had|already|just|previously|['’]ve)\s+)*(?:told|asked|messaged|contacted|notified|replied|responded|sent|offered|accepted|declined|said|spoke|talked)\b|\b(?:i|we)\s+(?:(?:have|had)\s+)?heard back\b/i;
+
+/** A focused delivery-consistency eval, intentionally separate from the general chat score. */
+export function gradeAgentDesync(
+  reply: string,
+  evidence: ChatTurnTrace['communicationEvidence'] = { outbound: [], inbound: [] },
+): DesyncEval {
+  const claimsOutbound = OUTBOUND_COMMUNICATION_CLAIM.test(reply);
+  const claimsInbound = INBOUND_COMMUNICATION_CLAIM.test(reply);
+  if (!claimsOutbound && !claimsInbound) return { result: 'pass' };
+
+  const unsupported: string[] = [];
+  const pending: string[] = [];
+  if (claimsOutbound) {
+    if (evidence.outbound.includes('processed')) {
+      // A processed message confirms at least one outbound contact in this process.
+    } else if (evidence.outbound.includes('enqueued')) pending.push('outbound');
+    else unsupported.push('outbound');
+  }
+  if (claimsInbound) {
+    if (evidence.inbound.includes('processed')) {
+      // A processed message confirms at least one inbound contact in this process.
+    } else if (evidence.inbound.includes('enqueued')) pending.push('inbound');
+    else unsupported.push('inbound');
+  }
+  if (unsupported.length) return { result: 'fail', detail: `unsupported ${unsupported.join(' and ')} communication claim` };
+  if (pending.length) return { result: 'inconclusive', detail: `delivery still pending for ${pending.join(' and ')} claim` };
+  return { result: 'pass' };
+}
 
 const MONEY = /\$\s?(\d[\d,]*(?:\.\d{1,2})?)/g;
 const cents = (s: string): number => Math.round(Number(s.replace(/,/g, '')) * 100);
@@ -49,8 +85,9 @@ export function gradeChatTurn(turn: ChatTurnTrace): Grade[] {
  * Online eval: attaches every grade to the active `invoke_agent` span, emits a score distribution
  * for dashboards/alerts, and opens one Sentry issue per failing grader so regressions are triaged like bugs.
  */
-export function recordChatEval(turn: ChatTurnTrace, attrs: { trigger: 'message' | 'event'; userId: string }): { score: number; grades: Grade[] } {
+export function recordChatEval(turn: ChatTurnTrace, attrs: { trigger: 'message' | 'event'; userId: string }): { score: number; grades: Grade[]; desync: DesyncEval } {
   const grades = gradeChatTurn(turn);
+  const desync = gradeAgentDesync(turn.reply, turn.communicationEvidence);
   const passed = grades.filter((g) => g.pass).length;
   const score = passed / grades.length;
   const span = Sentry.getActiveSpan();
@@ -58,6 +95,7 @@ export function recordChatEval(turn: ChatTurnTrace, attrs: { trigger: 'message' 
     'eval.score': score,
     'eval.failed': grades.filter((g) => !g.pass).map((g) => g.name).join(',') || 'none',
     'eval.actions': turn.actions.join(',') || 'none',
+    'eval.agent_desync': desync.result,
     'security.user_injection': turn.userInjection,
     'security.flagged_listings_in_context': turn.flaggedListingsInContext,
     ...Object.fromEntries(grades.map((g) => [`eval.${g.name}`, g.pass])),
@@ -77,7 +115,70 @@ export function recordChatEval(turn: ChatTurnTrace, attrs: { trigger: 'message' 
       Sentry.captureMessage(`Agent eval failed: ${g.name}`);
     });
   }
-  return { score, grades };
+  recordAgentDesyncEval(desync, {
+    trigger: attrs.trigger,
+    userId: attrs.userId,
+    outboundProcessed: turn.communicationEvidence?.outbound.filter((s) => s === 'processed').length ?? 0,
+    outboundPending: turn.communicationEvidence?.outbound.filter((s) => s === 'enqueued').length ?? 0,
+    inboundProcessed: turn.communicationEvidence?.inbound.filter((s) => s === 'processed').length ?? 0,
+    inboundPending: turn.communicationEvidence?.inbound.filter((s) => s === 'enqueued').length ?? 0,
+  });
+  return { score, grades, desync };
+}
+
+function recordAgentDesyncEval(
+  result: DesyncEval,
+  attrs: {
+    trigger: 'message' | 'event';
+    userId: string;
+    outboundProcessed: number;
+    outboundPending: number;
+    inboundProcessed: number;
+    inboundPending: number;
+  },
+): void {
+  const at = Math.floor(Date.now() / 1000);
+  const resultKey = result.result === 'pass' ? 'eval.pass_at'
+    : result.result === 'fail' ? 'eval.fail_at' : 'eval.inconclusive_at';
+  const attributes = {
+    'eval.name': 'agent_desync',
+    'eval.category': 'agent_desync',
+    'eval.source': 'live',
+    'eval.result': result.result,
+    [resultKey]: at,
+    'eval.trigger': attrs.trigger,
+    'eval.detail': result.detail,
+    'bus.outbound.processed_count': attrs.outboundProcessed,
+    'bus.outbound.pending_count': attrs.outboundPending,
+    'bus.inbound.processed_count': attrs.inboundProcessed,
+    'bus.inbound.pending_count': attrs.inboundPending,
+  };
+  Sentry.startSpan({
+    op: 'eval.agent_desync',
+    name: `eval agent_desync ${result.result}`,
+    attributes,
+  }, (span) => {
+    if (result.result === 'fail') span.setStatus({ code: 2, message: 'unsupported_communication_claim' });
+  });
+  metric.count('agent.desync_eval.result', { result: result.result, trigger: attrs.trigger });
+  log[result.result === 'fail' ? 'error' : 'info'](`agent desync eval ${result.result}`, attributes);
+  if (result.result !== 'fail') return;
+
+  Sentry.withScope((scope) => {
+    scope.setLevel('error');
+    scope.setFingerprint(['agent-desync', result.detail ?? 'unsupported-communication-claim']);
+    scope.setTags({ 'eval.name': 'agent_desync', 'eval.trigger': attrs.trigger });
+    scope.setContext('agent_desync', {
+      result: result.result,
+      detail: result.detail,
+      outbound_processed_count: attrs.outboundProcessed,
+      outbound_pending_count: attrs.outboundPending,
+      inbound_processed_count: attrs.inboundProcessed,
+      inbound_pending_count: attrs.inboundPending,
+    });
+    scope.setUser({ id: attrs.userId });
+    Sentry.captureMessage('Agent desync eval failed: unsupported communication claim');
+  });
 }
 
 export type EvalResult = {

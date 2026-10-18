@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Envelope, IntentPublic, Item } from '../src/contracts/index.js';
 import { MemoryNoticeRepository } from '../src/discovery/notices.js';
 import { resetNearMissDeliveries, setNoticeRepository, startDiscovery, stopDiscovery } from '../src/discovery/service.js';
@@ -148,15 +148,33 @@ describe('bus', () => {
     await refreshEdges('A');
     bus.setGuardContext(buildGuardContext);
     const seen: boolean[] = [];
-    bus.subscribe('B', (e) => { if (e.body.type === 'signal') seen.push(e.body.satisfiable); });
+    const unsubscribe = bus.subscribe('B', (e) => { if (e.body.type === 'signal') seen.push(e.body.satisfiable); });
     const violations: string[] = [];
     bus.onViolation((v) => violations.push(v.rule));
-    await bus.send(makeEnvelope('A', 'B', { type: 'signal', fromVersion: 1, toVersion: 1, satisfiable: true }));
-    await bus.send(makeEnvelope('A', 'B', { type: 'signal', fromVersion: 1, toVersion: 1, satisfiable: false }));
-    await bus.send(makeEnvelope('A', 'ghost', { type: 'signal', fromVersion: 1, toVersion: 1, satisfiable: true }));
+    const first = makeEnvelope('A', 'B', { type: 'signal', fromVersion: 1, toVersion: 1, satisfiable: true });
+    const second = makeEnvelope('A', 'B', { type: 'signal', fromVersion: 1, toVersion: 1, satisfiable: false });
+    await bus.send(first);
+    await bus.send(second);
+    unsubscribe();
+    const missingHandler = await bus.send(makeEnvelope('A', 'B', { type: 'signal', fromVersion: 1, toVersion: 1, satisfiable: true }));
+    const rejected = await bus.send(makeEnvelope('A', 'ghost', { type: 'signal', fromVersion: 1, toVersion: 1, satisfiable: true }));
     await bus.drain();
     expect(seen).toEqual([true, false]);
     expect(violations).toEqual(['addressee']);
+    expect(missingHandler).toMatchObject({ delivered: false, status: 'handler_missing' });
+    expect(rejected).toMatchObject({ delivered: false, status: 'guard_rejected' });
+    expect(bus.log.find((entry) => entry.id === first.id)?.status).toBe('processed');
+    expect(bus.log.find((entry) => entry.id === second.id)?.status).toBe('processed');
+
+    const handlerError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    bus.subscribe('B', async () => { throw new Error('test handler failure'); });
+    const failedEnvelope = makeEnvelope('A', 'B', { type: 'signal', fromVersion: 1, toVersion: 1, satisfiable: true });
+    const enqueued = await bus.send(failedEnvelope);
+    await bus.drain();
+    expect(enqueued).toMatchObject({ delivered: true, status: 'enqueued' });
+    expect(bus.log.find((entry) => entry.id === failedEnvelope.id)?.status).toBe('processing_failed');
+    expect(handlerError).toHaveBeenCalledOnce();
+    handlerError.mockRestore();
   });
 });
 
