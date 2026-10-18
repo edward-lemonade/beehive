@@ -14,7 +14,7 @@ Users post free-text intents. Agents (one per intent) find closed sets of direct
 | Frontend | Vite + React + TypeScript, react-leaflet | Vercel |
 | Auth | Clerk (JWT verified in API) | Clerk |
 | LLM | OpenAI-compatible chat API (Gemini/Groq free tiers or local Ollama), Zod-validated JSON | API |
-| Messaging | Photon Spectrum (`spectrum-ts`) | Render (same service) |
+| Messaging | Photon Beta (2.0) REST API and Socket.IO events | Render (same service) |
 | Monitoring | Sentry (`@sentry/node`, `@sentry/react`) | Sentry |
 
 **Why Node instead of FastAPI.** Spectrum is a Node/Bun SDK, so Python would need a second service just for messaging. The domain is also type-heavy (items, flows, arrangements, bus messages), and one language lets the frontend reuse the backend's Zod schemas (copied, not packaged). Sentry's AI integration also covers the Vercel AI SDK directly.
@@ -86,7 +86,7 @@ Parallel lanes once 01 is merged:
 7. **Code style:** TypeScript strict, Zod at every boundary, sparse comments, no refactors beyond the task.
 
 ## Env vars
-`DATABASE_URL`, `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `LLM_BASE_URL`, `LLM_API_KEY` (optional for local Ollama), `LLM_MODEL_FAST`, `PHOTON_PROJECT_ID`, `PHOTON_PROJECT_SECRET`, `PHOTON_WEBHOOK_SECRET`, `CHANNEL` (`photon` or `terminal`), `SENTRY_DSN_API`, `TIME_SCALE`, `SEARCH_BUDGET_EXPANSIONS` (200), `SEARCH_BUDGET_MS` (5000), `NEGOTIATION_ROUNDS` (3).
+`DATABASE_URL`, `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `LLM_BASE_URL`, `LLM_API_KEY` (optional for local Ollama), `LLM_MODEL_FAST`, `PHOTON_PROJECT_ID`, `PHOTON_API_KEY`, `PHOTON_SENDER_ID`, `PHOTON_PHONE_NUMBER` (Beta sender line), `CHANNEL` (`photon` or `terminal`), `SENTRY_DSN_API`, `TIME_SCALE`, `SEARCH_BUDGET_EXPANSIONS` (200), `SEARCH_BUDGET_MS` (5000), `NEGOTIATION_ROUNDS` (3).
 Web: `VITE_API_URL`, `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_SENTRY_DSN`.
 
 ## Not building
@@ -94,6 +94,6 @@ Dormancy states beyond one "nothing found" notice, approval freshness, reliabili
 
 ## Things to verify early
 - **Photon and SMS.** Photon's main product is iMessage lines, with SMS/RCS fallback. Confirm the line sends real SMS to non-iMessage numbers, since the challenge says SMS.
-- **Photon users.** A Photon project can only message people it knows. Read the API reference for registering users, and pre-register the team's phones.
+- **Photon users.** A Photon project can only message people it knows. With this flow, each user texts the configured line to verify/link their phone before outbound messages are enabled.
 - **Photon docs version.** Stable and Beta docs differ (project ids starting `pho_prj_` are Beta). Pick one and stay on it.
 - **Sentry metrics API.** Check the installed `@sentry/node` version exposes `Sentry.metrics`.

@@ -38,6 +38,7 @@ export const channelSchema = z.object({
   channel: z.enum(['app', 'sms']),
   phoneLinked: z.boolean(),
   phoneTail: z.string().nullable(),
+  phoneNumber: z.string().optional(),
 })
 
 export const actionResultSchema = z.object({

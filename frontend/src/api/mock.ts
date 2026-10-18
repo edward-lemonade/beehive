@@ -99,8 +99,13 @@ export function createMockApi(): Api {
       return next
     },
     setPhone: async () => {
+      phone = false
+      sms = false
+      return { channel: 'app', phoneLinked: false, phoneTail: null }
+    },
+    requestPhoneLink: async () => {
       phone = true
-      return { channel: sms ? 'sms' : 'app', phoneLinked: true, phoneTail: '0100' }
+      return { code: '1234', phoneNumber: '+15550000000' }
     },
     setChannel: async (next) => {
       if (next === 'sms' && !phone) throw new Error('Add a phone number before switching to SMS')

@@ -10,7 +10,7 @@ Goal: a one-command reset to a known state, a deployed system, and a rehearsed d
 
 - For the API, copy `backend/.env.example` to `backend/.env` and fill in each blank required value. The template documents where to get each credential and shows the Supabase PostgreSQL URL shape.
 - For the web app, copy `frontend/.env.example` to `frontend/.env` and fill in the Clerk publishable key. Use the deployed API URL for `VITE_API_URL` outside local development.
-- For `npm run db:migrate`, provide `DATABASE_URL` in the environment. Prefer Supabase's direct connection URL for migrations; use the session pooler URL for a deployed API.
+- For `npm run db:migrate`, provide `DATABASE_URL` in the environment. Prefer Supabase's direct connection URL for migrations; use the session pooler URL for the deployed API. Locally, run `npm run db:migrate:local` to load `backend/.env`.
 - Never commit either `.env` file or share secret keys. Keep the Clerk secret, LLM API key, Photon credentials, database password, and Sentry DSNs private.
 - `CHANNEL=terminal` avoids sending messages through Photon during local development; Photon credentials are required only when `CHANNEL=photon`.
 
@@ -24,16 +24,16 @@ Goal: a one-command reset to a known state, a deployed system, and a rehearsed d
 | Monitoring | Sentry | Two projects (api, web), or one with two DSNs. |
 
 Steps:
-1. Create Supabase project, run migrations (`npm run db:migrate` in `backend/`).
-2. Render: root directory `backend`, build `npm install && npm run build`, start `node dist/index.js`, set all env vars, set health check `/health`.
+1. Create Supabase project and apply its migrations (`npm run db:migrate` in `backend/`, with `DATABASE_URL` set).
+2. Render: root directory `backend`; build `npm ci --include=dev && npm run build`; pre-deploy command `npm run db:migrate`; start `node --import ./dist/src/instrument.js ./dist/src/index.js`; set all runtime env vars and health check `/health`.
 3. Vercel: root directory `frontend`, framework Vite, set env vars.
-4. Point Photon webhook (if used) at the Render URL. Test with one message.
+4. Confirm the Photon Beta event stream connects from Render and test one real SMS in each direction.
 5. Smoke test: sign in, post an intent, see it in the public intent feed, see a Sentry transaction.
 6. Write the steps into `docs/deploy.md` as you do them.
 
 **Where do agents run for the demo?** In the Render API process. They are cheap objects, not services. Two options for the recording:
 - **Deployed (default):** the real stack with `TIME_SCALE` raised so approval windows take seconds.
-- **Local with a tunnel:** run the API locally behind a tunnel (for example Cloudflare Tunnel or ngrok) so Photon webhooks reach it. Faster iteration, no sleep risk, and logs on screen. Use this if Render is flaky on the day.
+- **Local with a tunnel:** run the API locally behind a tunnel only if a public callback is needed for another integration. Photon Beta events use an outbound Socket.IO connection, so the API itself does not need an inbound public webhook. Faster iteration, no sleep risk, and logs on screen. Use this if Render is flaky on the day.
 
 ## Demo speed
 - `TIME_SCALE=300` makes the 24-hour approval window about 5 minutes. For the video, `TIME_SCALE=1440` makes it a minute.

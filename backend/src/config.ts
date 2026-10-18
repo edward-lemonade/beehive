@@ -8,8 +8,8 @@ const envSchema = z.object({
   LLM_API_KEY: z.string().optional().default(''),
   LLM_MODEL_FAST: z.string().min(1),
   PHOTON_PROJECT_ID: z.string().optional().default(''),
-  PHOTON_PROJECT_SECRET: z.string().optional().default(''),
-  PHOTON_WEBHOOK_SECRET: z.string().optional().default(''),
+  PHOTON_API_KEY: z.string().optional().default(''),
+  PHOTON_SENDER_ID: z.string().optional().default(''),
   PHOTON_PHONE_NUMBER: z.string().optional().default(''),
   CHANNEL: z.enum(['photon', 'terminal']),
   SENTRY_DSN_API: z.string().optional().default(''),
@@ -31,7 +31,7 @@ const envSchema = z.object({
   VITE_SENTRY_DSN: z.string().optional(),
 }).superRefine((values, context) => {
   if (values.CHANNEL === 'photon') {
-    for (const key of ['PHOTON_PROJECT_ID', 'PHOTON_PROJECT_SECRET', 'PHOTON_WEBHOOK_SECRET', 'PHOTON_PHONE_NUMBER'] as const) {
+    for (const key of ['PHOTON_PROJECT_ID', 'PHOTON_API_KEY', 'PHOTON_SENDER_ID', 'PHOTON_PHONE_NUMBER'] as const) {
       if (!values[key]) {
         context.addIssue({
           code: 'custom',
@@ -45,6 +45,20 @@ const envSchema = z.object({
         code: 'custom',
         path: ['PHOTON_PHONE_NUMBER'],
         message: 'PHOTON_PHONE_NUMBER must use E.164 format',
+      });
+    }
+    if (values.PHOTON_PROJECT_ID && !/^pho_prj_[0-7][0-9a-hjkmnp-tv-z]{25}$/.test(values.PHOTON_PROJECT_ID)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['PHOTON_PROJECT_ID'],
+        message: 'PHOTON_PROJECT_ID must be a Photon Beta project ID',
+      });
+    }
+    if (values.PHOTON_SENDER_ID && !/^pho_usr_[0-7][0-9a-hjkmnp-tv-z]{25}$/.test(values.PHOTON_SENDER_ID)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['PHOTON_SENDER_ID'],
+        message: 'PHOTON_SENDER_ID must be the assigned Photon Beta sender user ID',
       });
     }
   }

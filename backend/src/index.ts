@@ -26,10 +26,26 @@ import { demoRouter } from './observability/demo.js';
 import { installConversationLog } from './observability/conversation.js';
 import { installMonitors } from './observability/monitors.js';
 import { Sentry } from './observability/telemetry.js';
+import { createHttpErrorMiddleware } from './observability/http-errors.js';
 
 const app = new Hono();
 // Sentry.init runs in src/instrument.ts (loaded with --import); this only instruments requests.
 app.use(sentry(app));
+const requestErrors = new WeakMap<object, Error>();
+app.use('*', createHttpErrorMiddleware((failure) => {
+  if (failure.error) {
+    Sentry.captureException(failure.error);
+    return;
+  }
+  Sentry.captureMessage(`HTTP ${failure.status} response`, {
+    level: failure.status >= 500 ? 'error' : 'warning',
+    tags: {
+      'http.request.method': failure.method,
+      'http.response.status_code': String(failure.status),
+    },
+    extra: { path: failure.path },
+  });
+}, (context) => requestErrors.get(context)));
 const photon = config.CHANNEL === 'photon' ? await createPhotonAdapter() : null;
 
 app.use('*', logger());
@@ -62,7 +78,6 @@ app.route('/me', channelRouter);
 app.route('/me', contactRouter);
 app.route('/agent', agentRouter);
 app.route('/dev', seedRouter);
-if (photon) app.post('/webhooks/photon', (c) => photon.webhook(c.req.raw));
 if (config.DEMO_MODE) app.route('/demo', demoRouter);
 
 installNegotiation();
@@ -78,7 +93,7 @@ if (!process.env.VITEST) {
 }
 
 app.onError((err, c) => {
-  Sentry.captureException(err);
+  requestErrors.set(c, err);
   return c.json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' }, 500);
 });
 

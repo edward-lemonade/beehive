@@ -60,6 +60,7 @@ export type Api = {
   channel(): Promise<ChannelState>
   setChannel(channel: 'app' | 'sms'): Promise<ChannelState>
   setPhone(phone: string): Promise<ChannelState>
+  requestPhoneLink(): Promise<{ code: string; phoneNumber: string }>
   contact(): Promise<string | null>
   setContact(contact: string): Promise<string>
   subscribe(handlers: StreamHandlers): () => void
@@ -138,6 +139,10 @@ export function createHttpApi(getToken: TokenGetter, baseUrl = API_URL): Api {
     },
     channel: async () => channelSchema.parse(await request('/me/channel')),
     setChannel: async (channel) => channelSchema.parse(await post('/me/channel', { channel })),
+    requestPhoneLink: async () => {
+      const r = await post('/me/link-code')
+      return { code: z.string().length(4).parse(r.code), phoneNumber: z.string().parse(r.phoneNumber) }
+    },
     contact: async () => ((await request('/me/contact')).contact as string | null) ?? null,
     setContact: async (contact) => (await post('/me/contact', { contact })).contact as string,
     setPhone: async (phone) => channelSchema.parse(await post('/me/phone', { phone })),
