@@ -24,6 +24,7 @@ function IntentRow({ intent, onDraft }: { intent: MyIntent; onDraft: (draft: Dra
   const api = useApi()
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const [text, setText] = useState(intent.public.freeText)
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['mine-intents'] })
@@ -40,17 +41,35 @@ function IntentRow({ intent, onDraft }: { intent: MyIntent; onDraft: (draft: Dra
   const isOpen = intent.state === 'open'
 
   return (
-    <li className="rounded border border-slate-200 bg-white p-3 text-sm">
-      <div className="flex items-center justify-between">
+    <li className="relative rounded-lg border border-slate-200 bg-white/90 px-3 py-2 text-sm">
+      <button
+        aria-label="Delete intent"
+        title="Delete intent"
+        disabled={remove.isPending}
+        onClick={() => remove.mutate()}
+        className="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-md text-red-600 hover:bg-red-50 disabled:opacity-50"
+      >
+        <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+          <path d="m4 4 8 8M12 4l-8 8" />
+        </svg>
+      </button>
+      <div className="flex items-center gap-2 pr-6">
         <span className="rounded bg-slate-100 px-1.5 text-xs uppercase">{intent.state}</span>
         <span className="text-xs text-slate-500">v{intent.version}</span>
       </div>
       {editing ? (
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} className="mt-2 w-full rounded border border-slate-300 p-2" />
       ) : (
-        <p className="mt-1 break-words">{intent.public.freeText}</p>
+        <button
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+          title={expanded ? 'Collapse intent' : 'Show full intent'}
+          className={`mt-1 w-full wrap-break-word text-left text-sm leading-5 ${expanded ? 'whitespace-pre-wrap' : 'line-clamp-2'}`}
+        >
+          {intent.public.freeText}
+        </button>
       )}
-      <div className="mt-2 flex flex-wrap gap-2">
+      <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs">
         {isOpen && !editing && <button onClick={() => setEditing(true)} className="rounded border border-slate-300 px-2 py-0.5">Edit</button>}
         {editing && (
           <>
@@ -60,7 +79,6 @@ function IntentRow({ intent, onDraft }: { intent: MyIntent; onDraft: (draft: Dra
         )}
         {isOpen && <button disabled={withdraw.isPending} onClick={() => withdraw.mutate()} className="rounded border border-slate-300 px-2 py-0.5 disabled:opacity-50">Withdraw</button>}
         {isOpen && <button disabled={keep.isPending} onClick={() => keep.mutate()} className="rounded border border-slate-300 px-2 py-0.5 disabled:opacity-50">Push agent</button>}
-        <button disabled={remove.isPending} onClick={() => remove.mutate()} className="rounded border border-red-300 px-2 py-0.5 text-red-700 disabled:opacity-50">Delete</button>
         {(intent.state === 'withdrawn' || intent.state === 'expired') && (
           <button disabled={reopen.isPending} onClick={() => reopen.mutate()} className="rounded border border-slate-300 px-2 py-0.5 disabled:opacity-50">Reopen</button>
         )}
@@ -113,22 +131,23 @@ function NewIntent({ draft, setDraft }: { draft: Draft | null; setDraft: (draft:
 
   return (
     <form
-      className="mb-3"
+      className="shrink-0 border-t border-amber-900/10 bg-white/40 p-4"
       onSubmit={(e) => {
         e.preventDefault()
         void submit()
       }}
     >
       {draft?.question && <p className="mb-1 text-sm text-slate-700">{draft.question}</p>}
-      <div className="flex gap-2">
-        <input
+      <div className="flex flex-col gap-2">
+        <textarea
           aria-label="New intent"
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder={draft?.question ? 'Your answer' : 'e.g. selling a ticket for $100'}
-          className="min-w-0 flex-1 rounded border border-slate-300 px-2 py-1 text-sm"
+          rows={5}
+          className="composer-input"
         />
-        <button disabled={busy || !text.trim()} className="rounded bg-slate-900 px-3 py-1 text-sm text-white disabled:opacity-50">
+        <button disabled={busy || !text.trim()} className="composer-submit">
           {busy ? 'Working…' : draft?.question ? 'Answer' : 'Create'}
         </button>
       </div>
@@ -152,20 +171,20 @@ export function MyIntents() {
   })
   const query = useQuery({ queryKey: ['mine-intents'], queryFn: () => api.myIntents(), refetchInterval: pollWhenDown(up) })
   return (
-    <section aria-label="My intents" className="flex flex-col lg:h-full lg:min-h-0">
-      <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-lg font-semibold">My intents</h2>
-        <button disabled={seed.isPending} onClick={() => seed.mutate()} className="rounded border border-slate-300 px-2 py-0.5 text-xs disabled:opacity-50">
+    <section aria-label="Your intents" className="dashboard-panel panel-mine flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-amber-900/10 px-4 py-4">
+        <h2 className="text-lg font-semibold">Your intents</h2>
+        <button disabled={seed.isPending} onClick={() => seed.mutate()} className="rounded-lg border border-amber-900/15 bg-white/70 px-2 py-1 text-xs disabled:opacity-50">
           {seed.isPending ? 'Loading…' : 'Load seed data'}
         </button>
       </div>
-      {seed.isError && <p role="alert" className="mb-2 text-xs text-red-600">{errorMessage(seed.error)}</p>}
-      <NewIntent draft={draft} setDraft={setDraft} />
-      <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1">
+      {seed.isError && <p role="alert" className="px-4 pt-2 text-xs text-red-600">{errorMessage(seed.error)}</p>}
+      <div role="region" aria-label="Your intent list" tabIndex={0} className="intent-scroll mx-3 my-3 min-h-0 flex-1 overflow-y-scroll rounded-xl border border-amber-900/15 bg-white/25 p-2">
       {query.isError && <p role="alert" className="text-sm text-red-600">{errorMessage(query.error)}</p>}
       {query.data?.length === 0 && <p className="text-sm text-slate-500">Nothing posted yet.</p>}
-      <ul className="space-y-2">{query.data?.map((intent) => <IntentRow key={intent.id} intent={intent} onDraft={setDraft} />)}</ul>
+      <ul className="space-y-1.5">{query.data?.map((intent) => <IntentRow key={intent.id} intent={intent} onDraft={setDraft} />)}</ul>
       </div>
+      <NewIntent draft={draft} setDraft={setDraft} />
     </section>
   )
 }

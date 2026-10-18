@@ -89,21 +89,21 @@ export function AgentChat() {
   const failure = error
 
   return (
-    <section aria-label="Your agent" className="flex h-full min-h-0 flex-col rounded border border-slate-200 bg-white">
-      <header className="flex shrink-0 items-center justify-between border-b border-slate-200 px-3 py-2">
+    <section aria-label="Your agent" className="dashboard-panel panel-chat flex h-full min-h-0 flex-col">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-emerald-900/10 px-4 py-4">
         <h2 className="text-lg font-semibold">Your agent</h2>
         <div className="flex items-center gap-3">
           <button onClick={() => { clearChat(); seed() }} className="text-xs text-slate-500 hover:text-slate-800">Clear chat</button>
           <ChannelToggle />
         </div>
       </header>
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3" role="log" aria-live="polite">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4" role="log" aria-live="polite">
         {chat.map((m) => {
           const entry = m.arrangementId && m.key?.startsWith('card:') ? entries?.find((e) => e.terms.arrangementId === m.arrangementId && e.terms.approval !== 'declined' && e.terms.state === 'committed') : undefined
           if (entries && m.key?.startsWith('card:') && !entry) return null
           return (
             <div key={m.id} className={`flex flex-col ${m.from === 'me' ? 'items-end' : 'items-start'}`}>
-              <p className={`max-w-[85%] break-words rounded-2xl px-3 py-1.5 text-sm ${m.from === 'me' ? 'rounded-br-sm bg-emerald-600 text-white' : 'rounded-bl-sm bg-slate-100 text-slate-900'}`}>{m.text}</p>
+              <p className={`max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm ${m.from === 'me' ? 'rounded-br-sm bg-emerald-700 text-white' : 'rounded-bl-sm border border-white/80 bg-white/85 text-slate-900'}`}>{m.text}</p>
               {sentryEnabled && m.from === 'agent' && (!m.key || m.key.startsWith('ask:')) && (
                 rated.has(m.id)
                   ? <span className="mt-0.5 text-[11px] text-slate-400">Thanks, flagged for review</span>
@@ -121,20 +121,21 @@ export function AgentChat() {
         <p className="shrink-0 border-t border-slate-200 p-3 text-sm text-slate-600">Your agent is texting you. Switch back to Chat to continue here.</p>
       ) : (
         <form
-          className="flex shrink-0 gap-2 border-t border-slate-200 p-2"
+          className="flex shrink-0 flex-col gap-2 border-t border-emerald-900/10 bg-white/40 p-4"
           onSubmit={(e) => {
             e.preventDefault()
             submit()
           }}
         >
-          <input
+          <textarea
             aria-label="Message your agent"
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder={'Talk to your agent'}
-            className="min-w-0 flex-1 rounded border border-slate-300 px-3 py-1.5 text-sm"
+            rows={5}
+            className="composer-input"
           />
-          <button disabled={busy || !text.trim()} className="rounded bg-slate-900 px-3 py-1.5 text-sm text-white disabled:opacity-50">Send</button>
+          <button disabled={busy || !text.trim()} className="composer-submit">Send</button>
         </form>
       )}
     </section>

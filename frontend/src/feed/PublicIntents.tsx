@@ -44,7 +44,7 @@ export function IntentCard({ intent, own }: { intent: IntentPublic; own: boolean
   return (
     <li
       data-testid="intent-card"
-      className={`rounded border p-3 ${own ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 bg-white'}`}
+      className={`rounded-lg border px-3 py-2 ${own ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 bg-white/90'}`}
     >
       <button className="w-full text-left" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
         <span className="flex items-center gap-2 text-sm">
@@ -53,7 +53,7 @@ export function IntentCard({ intent, own }: { intent: IntentPublic; own: boolean
           <span className="rounded bg-slate-100 px-1.5 text-xs uppercase text-slate-600">{intent.tier}</span>
           {own && <span className="text-xs text-emerald-700">Yours</span>}
         </span>
-        <span className="mt-1 block break-words text-sm text-slate-800">{shown}</span>
+        <span className={`mt-1 wrap-break-word text-sm leading-5 text-slate-800 ${open ? 'block' : 'line-clamp-2'}`}>{shown}</span>
       </button>
       {open && (
         <div className="mt-2 text-xs text-slate-500">
@@ -90,13 +90,13 @@ export function PublicIntents() {
   const ownIds = new Set((mine.data ?? []).map((i) => i.id))
 
   return (
-    <section aria-label="Public intents" className="flex flex-col lg:h-full lg:min-h-0">
-      <h2 className="mb-2 text-lg font-semibold">Open intents</h2>
-      <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1">
+    <section aria-label="Public intents" className="dashboard-panel panel-feed flex h-[calc(100dvh-12rem)] min-h-[480px] flex-col lg:h-full lg:min-h-0">
+      <h2 className="shrink-0 border-b border-blue-900/10 px-4 py-4 text-lg font-semibold">Open intents</h2>
+      <div role="region" aria-label="Open intent list" tabIndex={0} className="intent-scroll mx-3 my-3 min-h-0 flex-1 overflow-y-scroll rounded-xl border border-blue-900/15 bg-white/25 p-2">
       {publicQuery.isPending && <p className="text-sm text-slate-500">Loading…</p>}
       {publicQuery.isError && <p role="alert" className="text-sm text-red-600">{errorMessage(publicQuery.error)}</p>}
       {publicQuery.data?.length === 0 && <p className="text-sm text-slate-500">No open intents yet.</p>}
-      <ul className="space-y-2">
+      <ul className="space-y-1.5">
         {publicQuery.data?.map((intent) => (
           <IntentCard key={intent.intentId} intent={intent} own={ownIds.has(intent.intentId)} />
         ))}

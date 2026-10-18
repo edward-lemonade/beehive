@@ -1,5 +1,18 @@
 # React + TypeScript + Vite
 
+## Dashboard layout
+
+The dashboard has a Beehive top bar with the signed-in user's profile menu
+(or a demo avatar in mock mode). On desktop, three softly colored gradient
+panels display your intents, a wider agent chat, and the public feed.
+Smaller screens use the Mine, Agent, and Feed tabs.
+
+Intent lists scroll independently inside bordered containers. Cards use
+two-line previews; select a preview to expand it. Your intent cards have a
+red corner X to delete them. The new-intent and chat composers stay at the
+bottom of their panels, with multiline text areas and full-width submit
+buttons. Enter adds a new line; use Create or Send to submit.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

@@ -2,7 +2,87 @@
 
 body {
   margin: 0;
-  background: #f8fafc;
+  background: #f4f5f2;
   color: #0f172a;
   font-family: system-ui, sans-serif;
+}
+
+.dashboard-panel {
+  border: 1px solid rgb(15 23 42 / 8%);
+  border-radius: 20px;
+  box-shadow: 0 4px 20px rgb(15 23 42 / 4%);
+}
+
+.panel-mine {
+  background: linear-gradient(180deg, #f3e4c9 0%, #fffaf0 100%);
+}
+
+.panel-chat {
+  background: linear-gradient(180deg, #d7e9df 0%, #f5fff9 100%);
+}
+
+.panel-feed {
+  background: linear-gradient(180deg, #dce5f3 0%, #f7faff 100%);
+}
+
+.intent-scroll {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 #ffffff60;
+}
+
+.intent-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.intent-scroll::-webkit-scrollbar-track {
+  background: #ffffff60;
+  border-radius: 8px;
+}
+
+.intent-scroll::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 8px;
+}
+
+.composer-input {
+  display: block;
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 90%);
+  padding: 12px 14px;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.composer-submit {
+  width: 100%;
+  border-radius: 10px;
+  background: #0f172a;
+  padding: 11px 16px;
+  color: white;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.composer-submit:hover:not(:disabled) {
+  background: #1e293b;
+}
+
+.composer-submit:disabled {
+  opacity: 0.45;
+}
+
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+button:focus-visible,
+textarea:focus-visible,
+.intent-scroll:focus-visible {
+  outline: 2px solid #047857;
+  outline-offset: 3px;
 }
