@@ -75,6 +75,27 @@ describe('conversation transcript', () => {
     expect(lines[0].attrs['conv.text']).toBeUndefined();
   });
 
+  it('describes unpriced cash as a seller price-setting step, not a zero-price payment', async () => {
+    const repo = new MemoryArrangementRepository();
+    setArrangementRepository(repo);
+    await repo.save({
+      id: 'arr-unpriced',
+      slots: [{ intentId: 'i-dawg', intentVersion: 1, approval: 'queued' }, { intentId: 'i-ed', intentVersion: 1, approval: 'queued' }],
+      links: [{
+        id: 'i-dawg|i-ed', a: 'i-dawg', b: 'i-ed', payer: 'i-ed', amountCents: null, state: 'agreed',
+        flows: [{ from: 'i-dawg', to: 'i-ed', item: { kind: 'ticket', label: '3-day ticket', attrs: {}, qty: 1 } }],
+      }],
+    } as never);
+
+    logDeal('proposed', 'arr-unpriced');
+    await conversationLogIdle();
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0].message).toContain('price not set; seller @dawg must name the asking price; buyer @edward is waiting');
+    expect(lines[0].message).not.toContain('pays @dawg no price');
+    expect(lines[0].attrs['conv.total_usd']).toBeUndefined();
+  });
+
   it('is silent when Sentry is not initialised', async () => {
     sink.client = false;
     logRound({ round: 1, fromIntentId: 'i-dawg', toIntentId: 'i-ed', kind: 'walk' });

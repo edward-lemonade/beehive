@@ -1,3 +1,5 @@
+import { negotiationLog } from './log.js';
+import { refreshEdges } from '../discovery/service.js';
 import { events } from '../events.js';
 import { getIntentRepository } from '../intents/service.js';
 import { ensureAgent } from '../runtime/registry.js';
@@ -25,6 +27,41 @@ const partyOf = (intent) => ({
     minNetCents: intent.private.minNetCents,
     declaredNetCents: intent.private.declaredNetCents,
 });
+// A comparable firm listing is a public benchmark, not permission to buy or a private spending limit.
+export async function competitiveOpening(payer, receiver, target) {
+    if (target.payCents !== null || target.payerFirm || target.receiverFirm || !target.askCents)
+        return undefined;
+    if (payer.public.give.some((item) => item.kind !== 'cash')
+        || payer.public.want.filter((slot) => slot.anyOf.some((item) => item.kind !== 'cash')).length !== 1
+        || receiver.public.give.filter((item) => item.kind !== 'cash').length !== 1
+        || receiver.public.want.some((slot) => slot.anyOf.some((item) => item.kind !== 'cash')))
+        return undefined;
+    const edges = await refreshEdges(payer.id);
+    const requested = edges.find((edge) => edge.other === receiver.id)?.selfWants;
+    if (requested?.length !== 1)
+        return undefined;
+    let cheapest = target.askCents;
+    const repo = getIntentRepository();
+    for (const edge of edges) {
+        if (edge.other === receiver.id || edge.selfWants.length !== 1
+            || edge.selfWants[0].slot !== requested[0].slot
+            || edge.selfWants[0].item.qty !== requested[0].item.qty)
+            continue;
+        const other = await repo.get(edge.other);
+        if (!other || other.state !== 'open'
+            || other.public.give.filter((item) => item.kind !== 'cash').length !== 1
+            || other.public.want.length !== 1 || other.public.want[0].anyOf.length !== 1)
+            continue;
+        const price = other.public.want[0].anyOf[0];
+        if (price.kind === 'cash' && price.flex === 'firm' && price.amountCents && price.amountCents > 0) {
+            cheapest = Math.min(cheapest, price.amountCents * price.qty);
+        }
+    }
+    if (cheapest >= target.askCents)
+        return undefined;
+    const opening = Math.floor(cheapest * 0.9);
+    return opening > 0 ? opening : undefined;
+}
 export async function priceArrangement(arrangement) {
     const repo = getIntentRepository();
     const intents = new Map();
@@ -47,12 +84,24 @@ export async function priceArrangement(arrangement) {
         terms.push(termsFor(link, intents.get(link.payer), intents.get(receiverId)));
     }
     const priced = new Map();
+    let proposal;
     let remaining = terms;
     while (remaining.length > 0) {
         const target = pricingOrder(remaining)[0];
         const payer = intents.get(target.payer);
         const receiver = intents.get(target.receiver);
-        const bounds = linkBounds(target, deriveLinkBounds(partyOf(payer), target, terms, priced), deriveLinkBounds(partyOf(receiver), target, terms, priced));
+        const payerBounds = deriveLinkBounds(partyOf(payer), target, terms, priced);
+        const receiverBounds = deriveLinkBounds(partyOf(receiver), target, terms, priced);
+        // Nobody has named a price, so there is nothing to haggle over: leave the link unpriced for the seller to name.
+        if (target.payCents === null && target.askCents === null && !target.payerFirm && !target.receiverFirm && receiverBounds.minCents === 0) {
+            target.link.amountCents = null;
+            target.link.state = 'unpriced';
+            remaining = remaining.filter((t) => t !== target);
+            continue;
+        }
+        const bounds = linkBounds(target, payerBounds, receiverBounds, {
+            competitiveOpenCents: await competitiveOpening(payer, receiver, target),
+        });
         ensureAgent(payer.id);
         ensureAgent(receiver.id);
         const result = await runSession({
@@ -86,11 +135,19 @@ export async function priceArrangement(arrangement) {
         }
         target.link.state = 'agreed';
         target.link.amountCents = result.amountCents;
+        if (terms.length === 1 && result.pendingUser && result.pendingSide) {
+            proposal = {
+                linkId: target.link.id,
+                amountCents: result.amountCents,
+                fromIntentId: result.pendingSide === 'receiver' ? payer.id : receiver.id,
+                source: 'agent',
+            };
+        }
         priced.set(target.link.id, result.amountCents);
         remaining = remaining.filter((t) => t !== target);
     }
     events.emit('arrangement.priced', { arrangementId: arrangement.id });
-    return { state: 'agreed', links };
+    return { state: 'agreed', links, ...(proposal ? { proposal } : {}) };
 }
 // Re-runs one link of a priced arrangement with the others held fixed. `anchor` is the caller's target.
 export async function repriceLink(arrangement, linkId, anchor, attempt) {
@@ -119,13 +176,30 @@ export async function repriceLink(arrangement, linkId, anchor, attempt) {
     const payer = intents.get(target.payer);
     const receiver = intents.get(target.receiver);
     const payerBounds = deriveLinkBounds(partyOf(payer), target, all, priced);
-    const receiverBounds = deriveLinkBounds(partyOf(receiver), target, all, priced);
-    if (!withinBounds(anchor.side, anchor.cents, anchor.side === 'payer' ? payerBounds : receiverBounds)) {
+    let receiverBounds = deriveLinkBounds(partyOf(receiver), target, all, priced);
+    // A seller naming a price is the user speaking: it replaces the listed ask and becomes a stated floor.
+    if (anchor.side === 'receiver' && anchor.cents !== undefined && anchor.cents >= 0) {
+        receiverBounds = { ...receiverBounds, minCents: anchor.cents, floorStated: true };
+    }
+    if (anchor.cents !== undefined && !withinBounds(anchor.side, anchor.cents, anchor.side === 'payer' ? payerBounds : receiverBounds)) {
         return { state: 'failed', reason: 'needs_bound_change' };
     }
-    const bounds = linkBounds(target, payerBounds, receiverBounds, anchor.side === 'payer'
-        ? { payerOpenCents: anchor.cents }
-        : { receiverAskCents: anchor.cents });
+    // If the other side's latest offer on this arrangement is exactly this price, the user is saying yes to it: settle, don't restart haggling.
+    if (anchor.cents !== undefined) {
+        const mine = anchor.side === 'payer' ? payer.id : receiver.id;
+        const entries = (await negotiationLog().forIntents([mine], 200)).filter((e) => e.arrangementId === arrangement.id && e.kind === 'offer');
+        const latest = entries[entries.length - 1];
+        if (latest && latest.from !== mine && latest.amountCents === anchor.cents) {
+            return { state: 'agreed', amountCents: anchor.cents };
+        }
+    }
+    if (anchor.cents === undefined && target.payCents === null && target.askCents === null
+        && !target.payerFirm && !target.receiverFirm && receiverBounds.minCents === 0) {
+        return { state: 'failed', reason: 'no_price_named' };
+    }
+    const bounds = linkBounds(target, payerBounds, receiverBounds, anchor.cents === undefined
+        ? { competitiveOpenCents: await competitiveOpening(payer, receiver, target) }
+        : anchor.side === 'payer' ? { payerOpenCents: anchor.cents } : { receiverAskCents: anchor.cents });
     ensureAgent(payer.id);
     ensureAgent(receiver.id);
     const result = await runSession({
@@ -135,6 +209,10 @@ export async function repriceLink(arrangement, linkId, anchor, attempt) {
         receiverId: receiver.id,
         bounds,
     });
+    // The other agent only escalated to its user, so nothing has been agreed yet.
+    if (result.state === 'agreed' && result.amountCents !== undefined && result.pendingUser) {
+        return { state: 'pending', amountCents: result.amountCents };
+    }
     return result.state === 'agreed' && result.amountCents !== undefined
         ? { state: 'agreed', amountCents: result.amountCents }
         : { state: 'failed', reason: result.reason ?? 'no_agreement' };

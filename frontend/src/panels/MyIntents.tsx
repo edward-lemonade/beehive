@@ -198,13 +198,14 @@ export function MyIntents() {
   const { open: choosingSeed, setOpen: setChoosingSeed } = useSeedDataDialog()
   const [scenarioId, setScenarioId] = useState('')
   const seedDialog = useRef<HTMLDialogElement>(null)
-  const { up } = useLive()
+  const { up, clearChat } = useLive()
   const queryClient = useQueryClient()
   const scenarios = useQuery({ queryKey: ['seed-options'], queryFn: () => api.seedOptions(), enabled: choosingSeed })
   const seed = useMutation({
     mutationFn: (id: string) => api.loadSeed(id),
     onSuccess: () => {
       setChoosingSeed(false)
+      clearChat()
       void queryClient.invalidateQueries({ queryKey: ['mine-intents'] })
       void queryClient.invalidateQueries({ queryKey: ['public'] })
       void queryClient.invalidateQueries({ queryKey: ['arrangements'] })
@@ -251,7 +252,7 @@ export function MyIntents() {
                 {scenarios.data.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.label}</option>)}
               </select>
               <p className="text-xs text-slate-600">{scenarios.data.find((scenario) => scenario.id === (scenarioId || scenarios.data[0]?.id))?.description}</p>
-              <p className="text-xs text-amber-900">Replaces edward, kat, and dawg's current listings.</p>
+              <p className="text-xs text-amber-900">Replaces edward, kat, and dawg's listings and clears their old deals and chat history.</p>
               <button disabled={seed.isPending || scenarios.data.length === 0} className="w-full rounded-lg bg-slate-900 px-3 py-2 text-xs text-white disabled:opacity-50">
                 {seed.isPending ? 'Loading...' : 'Load selected dataset'}
               </button>

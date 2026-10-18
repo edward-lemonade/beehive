@@ -1,7 +1,7 @@
-import { getEdges } from '../discovery/service.js';
+import { getEdges, refreshEdges } from '../discovery/service.js';
 import { getIntentRepository } from '../intents/service.js';
 import { ensureAgent } from '../runtime/registry.js';
-import { termsFor } from './arrangement.js';
+import { competitiveOpening, termsFor } from './arrangement.js';
 import { deriveLinkBounds, linkBounds, withinBounds } from './pricing.js';
 import { runSession } from './session.js';
 const party = (i) => ({
@@ -26,8 +26,13 @@ function pairPayer(own, target, ownGives, ownGets) {
 async function neighborTerms(intent, excludeId) {
     const repo = getIntentRepository();
     const out = [];
-    for (const edge of await getEdges(intent.id)) {
+    const edges = await getEdges(intent.id);
+    const targetSlots = new Set(edges.find((edge) => edge.other === excludeId)?.selfWants.map((want) => want.slot));
+    for (const edge of edges) {
         if (edge.other === excludeId)
+            continue;
+        // Competing sellers for the same wanted slot are alternatives, not additional purchases.
+        if (edge.selfGives.length === 0 && edge.selfWants.length > 0 && edge.selfWants.every((want) => targetSlots.has(want.slot)))
             continue;
         const other = await repo.get(edge.other);
         if (!other)
@@ -52,7 +57,7 @@ export async function negotiateDirect(callerId, input) {
     const target = await repo.get(input.targetIntentId);
     if (!target || target.state !== 'open')
         return { status: 'not_relevant' };
-    const ownEdges = await getEdges(own.id);
+    const ownEdges = await refreshEdges(own.id);
     if (!ownEdges.some((e) => e.other === target.id))
         return { status: 'not_relevant' };
     const edge = ownEdges.find((e) => e.other === target.id);
@@ -71,6 +76,11 @@ export async function negotiateDirect(callerId, input) {
     const payerBounds = deriveLinkBounds(party(payer), terms, all, new Map());
     const receiverBounds = deriveLinkBounds(party(receiver), terms, all, new Map());
     const ownIsPayer = payer === own;
+    // Nobody named a price or a floor: there is nothing to offer, and inventing $0 would be wrong.
+    if (input.targetCents === undefined && terms.payCents === null && terms.askCents === null
+        && !terms.payerFirm && !terms.receiverFirm && receiverBounds.minCents === 0) {
+        return { status: 'no_price_named' };
+    }
     if (input.targetCents !== undefined) {
         const ok = ownIsPayer
             ? withinBounds('payer', input.targetCents, payerBounds)
@@ -79,7 +89,10 @@ export async function negotiateDirect(callerId, input) {
             return { status: 'needs_bound_change' };
     }
     const bounds = linkBounds(terms, payerBounds, receiverBounds, ownIsPayer
-        ? { payerOpenCents: input.targetCents }
+        ? {
+            payerOpenCents: input.targetCents,
+            competitiveOpenCents: input.targetCents === undefined ? await competitiveOpening(payer, receiver, terms) : undefined,
+        }
         : { receiverAskCents: input.targetCents });
     ensureAgent(own.id);
     ensureAgent(target.id);
@@ -90,6 +103,6 @@ export async function negotiateDirect(callerId, input) {
         bounds,
     });
     return result.state === 'agreed' && result.amountCents !== undefined
-        ? { status: 'agreed', amountCents: result.amountCents, rounds: result.rounds }
+        ? { status: result.pendingUser ? 'pending' : 'agreed', amountCents: result.amountCents, rounds: result.rounds }
         : { status: 'failed', rounds: result.rounds };
 }

@@ -1,3 +1,5 @@
+export const PUBLIC_CHANNEL = 'public';
+const HEARTBEAT_MS = 15_000;
 class SseHub {
     channels = new Map();
     subscribe(channel, listener) {
@@ -17,25 +19,54 @@ class SseHub {
         const listeners = this.channels.get(channel);
         if (!listeners)
             return;
-        for (const listener of listeners) {
+        for (const listener of [...listeners]) {
             listener({ ...event, createdAt: event.createdAt ?? Date.now() });
         }
     }
-    streamForUser(userId) {
+    publishToUser(userId, event) {
+        this.publish(`user:${userId}`, event);
+    }
+    publishPublic(event) {
+        this.publish(PUBLIC_CHANNEL, event);
+    }
+    /** One stream per client: its own user channel plus the shared public channel. */
+    streamForUser(userId, signal) {
         const encoder = new TextEncoder();
+        let cleanup = () => { };
         const stream = new ReadableStream({
-            start(controller) {
-                const listener = (event) => {
-                    controller.enqueue(encoder.encode(`event: ${event.type}\ndata: ${JSON.stringify(event.payload ?? {})}\n\n`));
+            start: (controller) => {
+                let closed = false;
+                const write = (text) => {
+                    if (closed)
+                        return;
+                    try {
+                        controller.enqueue(encoder.encode(text));
+                    }
+                    catch {
+                        cleanup();
+                    }
                 };
-                const unsubscribe = SseHub.instance.subscribe(`user:${userId}`, listener);
-                controller.enqueue(encoder.encode(`event: connected\ndata: {"userId":"${userId}"}\n\n`));
-                const cleanup = () => {
-                    unsubscribe();
-                    controller.close();
+                const listener = (event) => write(`event: ${event.type}\ndata: ${JSON.stringify({ ...event.payload, createdAt: event.createdAt })}\n\n`);
+                const unsubscribers = [this.subscribe(`user:${userId}`, listener), this.subscribe(PUBLIC_CHANNEL, listener)];
+                const heartbeat = setInterval(() => write(': ping\n\n'), HEARTBEAT_MS);
+                write(`event: connected\ndata: {"userId":"${userId}"}\n\n`);
+                cleanup = () => {
+                    if (closed)
+                        return;
+                    closed = true;
+                    clearInterval(heartbeat);
+                    for (const off of unsubscribers)
+                        off();
+                    try {
+                        controller.close();
+                    }
+                    catch {
+                        // already closed
+                    }
                 };
-                globalThis.__sse_cleanup = cleanup;
+                signal?.addEventListener('abort', cleanup);
             },
+            cancel: () => cleanup(),
         });
         return new Response(stream, {
             headers: {

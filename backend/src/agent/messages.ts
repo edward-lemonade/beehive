@@ -43,3 +43,8 @@ export async function saveChat(userId: string, m: Omit<StoredChatMessage, 'at'>)
 export async function clearChat(userId: string): Promise<void> {
   await sql`DELETE FROM chat_messages WHERE user_id = ${userId}`;
 }
+
+export async function clearChatsForUsers(userIds: string[]): Promise<void> {
+  if (userIds.length === 0) return;
+  await sql`DELETE FROM chat_messages WHERE user_id = ANY(${userIds}::uuid[])`;
+}

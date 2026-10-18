@@ -20,6 +20,7 @@ export class PostgresArrangementRepository {
             reason: row.reason,
             excluded: row.excluded,
             declaredNet: row.declared_net,
+            proposal: row.proposal ?? null,
             replaceDeadline: num(row.replace_deadline),
             createdAt: Number(row.created_at),
             updatedAt: Number(row.updated_at),
@@ -34,7 +35,6 @@ export class PostgresArrangementRepository {
                 approvedNetCents: num(s.approved_net_cents),
                 requestedAt: num(s.requested_at),
                 decidedAt: num(s.decided_at),
-                checklist: s.checklist,
             })),
             links: links
                 .filter((l) => l.arrangement_id === row.id)
@@ -58,21 +58,20 @@ export class PostgresArrangementRepository {
                     return 'stale';
                 }
                 await tx `
-          INSERT INTO arrangements (id, key, state, revision, reason, excluded, declared_net, replace_deadline, created_at, updated_at)
+          INSERT INTO arrangements (id, key, state, revision, reason, excluded, declared_net, replace_deadline, created_at, updated_at, proposal)
           VALUES (${a.id}, ${a.key}, ${a.state}, ${a.revision}, ${a.reason}, ${JSON.stringify(a.excluded)}::jsonb,
-            ${JSON.stringify(a.declaredNet)}::jsonb, ${a.replaceDeadline}, ${a.createdAt}, ${a.updatedAt})
+            ${JSON.stringify(a.declaredNet)}::jsonb, ${a.replaceDeadline}, ${a.createdAt}, ${a.updatedAt}, ${a.proposal ? JSON.stringify(a.proposal) : null}::jsonb)
           ON CONFLICT (id) DO UPDATE SET key = EXCLUDED.key, state = EXCLUDED.state, revision = EXCLUDED.revision,
             reason = EXCLUDED.reason, excluded = EXCLUDED.excluded, declared_net = EXCLUDED.declared_net,
-            replace_deadline = EXCLUDED.replace_deadline, updated_at = EXCLUDED.updated_at`;
+            replace_deadline = EXCLUDED.replace_deadline, updated_at = EXCLUDED.updated_at, proposal = EXCLUDED.proposal`;
                 await tx `DELETE FROM arrangement_slots WHERE arrangement_id = ${a.id}`;
                 await tx `DELETE FROM arrangement_links WHERE arrangement_id = ${a.id}`;
                 for (const s of a.slots) {
                     await tx `
             INSERT INTO arrangement_slots (arrangement_id, intent_id, user_id, intent_version, approval, terms_hash,
-              approved_net_cents, requested_at, decided_at, checklist)
+              approved_net_cents, requested_at, decided_at)
             VALUES (${a.id}, ${s.intentId}, ${s.userId}, ${s.intentVersion}, ${s.approval}, ${s.termsHash},
-              ${s.approvedNetCents}, ${s.requestedAt}, ${s.decidedAt},
-              ${s.checklist === null ? null : JSON.stringify(s.checklist)}::jsonb)`;
+              ${s.approvedNetCents}, ${s.requestedAt}, ${s.decidedAt})`;
                 }
                 for (const l of a.links) {
                     await tx `
@@ -113,6 +112,20 @@ export class PostgresArrangementRepository {
       WHERE s.user_id = ${userId} AND a.state IN ('proposed', 'committed')`;
         return this.load(rows.map((r) => r.id));
     }
+    async removeForUsers(userIds) {
+        if (userIds.length === 0)
+            return [];
+        return sql.begin(async (tx) => {
+            const removed = await tx `
+        DELETE FROM arrangements
+        WHERE id IN (
+          SELECT DISTINCT arrangement_id FROM arrangement_slots WHERE user_id = ANY(${userIds}::uuid[])
+        )
+        RETURNING id`;
+            await tx `DELETE FROM declined WHERE user_id = ANY(${userIds}::uuid[])`;
+            return removed.map((row) => row.id);
+        });
+    }
     async countRequested(userId) {
         const [row] = await sql `
       SELECT count(*) AS n FROM arrangement_slots s JOIN arrangements a ON a.id = s.arrangement_id
@@ -122,6 +135,11 @@ export class PostgresArrangementRepository {
     async addDecline(userId, key, at) {
         await sql `INSERT INTO declined (user_id, arrangement_key, created_at) VALUES (${userId}, ${key}, ${at})
       ON CONFLICT DO NOTHING`;
+    }
+    async revive(intentId) {
+        const pattern = `%${intentId}@%`;
+        await sql `DELETE FROM declined WHERE arrangement_key LIKE ${pattern}`;
+        await sql `UPDATE arrangements SET state = 'dissolved', reason = 'revived' WHERE state = 'dropped' AND key LIKE ${pattern}`;
     }
     async isDeclined(userId, key) {
         const rows = await sql `SELECT 1 FROM declined WHERE user_id = ${userId} AND arrangement_key = ${key}`;
@@ -222,11 +240,37 @@ export class MemoryArrangementRepository {
             .filter((r) => (r.state === 'proposed' || r.state === 'committed') && r.slots.some((s) => s.userId === userId))
             .map(clone);
     }
+    async removeForUsers(userIds) {
+        const users = new Set(userIds);
+        const removed = [];
+        for (const [id, row] of this.rows) {
+            if (row.slots.some((slot) => users.has(slot.userId))) {
+                this.rows.delete(id);
+                removed.push(id);
+            }
+        }
+        for (const decline of [...this.declines]) {
+            if (users.has(decline.slice(0, decline.indexOf('|'))))
+                this.declines.delete(decline);
+        }
+        return removed;
+    }
     async countRequested(userId) {
         return [...this.rows.values()].filter((r) => r.state === 'proposed' && r.slots.some((s) => s.userId === userId && s.approval === 'requested')).length;
     }
     async addDecline(userId, key) {
         this.declines.add(`${userId}|${key}`);
+    }
+    async revive(intentId) {
+        for (const entry of [...this.declines])
+            if (entry.slice(entry.indexOf('|') + 1).includes(`${intentId}@`))
+                this.declines.delete(entry);
+        for (const row of this.rows.values()) {
+            if (row.state === 'dropped' && row.key.includes(`${intentId}@`)) {
+                row.state = 'dissolved';
+                row.reason = 'revived';
+            }
+        }
     }
     async isDeclined(userId, key) {
         return this.declines.has(`${userId}|${key}`);

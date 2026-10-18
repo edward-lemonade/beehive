@@ -194,6 +194,7 @@ describe('end to end', () => {
       expect(event).not.toContain('unowned-arrangement');
       return JSON.stringify({ reply: 'model-output-market-review', action: null });
     });
+
     const review = await runAgentChat({
       user: { id: buyer.ownerId, handle: 'edward', tier: 'new' },
       event: {
@@ -300,6 +301,45 @@ describe('end to end', () => {
     expect(final.proposal).toBeUndefined();
   });
 
+  it('clears every historical arrangement involving seed users while preserving unrelated users', async () => {
+    const arrangement = (id: string, state: StoredArrangement['state'], userId: string): StoredArrangement => ({
+      id,
+      key: `${id}@1`,
+      state,
+      revision: 1,
+      reason: null,
+      excluded: [],
+      declaredNet: {},
+      replaceDeadline: null,
+      createdAt: 0,
+      updatedAt: 0,
+      slots: [{
+        intentId: `intent-${id}`,
+        userId,
+        intentVersion: 1,
+        approval: state === 'committed' ? 'fulfilled' : 'requested',
+        termsHash: null,
+        approvedNetCents: null,
+        requestedAt: null,
+        decidedAt: null,
+      }],
+      links: [],
+    });
+    await arrs.save(arrangement('seed-active', 'proposed', 'u-seed'));
+    await arrs.save(arrangement('seed-history', 'committed', 'u-seed'));
+    await arrs.save(arrangement('other-user', 'committed', 'u-other'));
+    arrs.declines.add('u-seed|old-seed-key');
+    arrs.declines.add('u-other|other-key');
+
+    await service.clearForUsers(['u-seed']);
+
+    expect(arrs.rows.has('seed-active')).toBe(false);
+    expect(arrs.rows.has('seed-history')).toBe(false);
+    expect(arrs.rows.has('other-user')).toBe(true);
+    expect(arrs.declines.has('u-seed|old-seed-key')).toBe(false);
+    expect(arrs.declines.has('u-other|other-key')).toBe(true);
+  });
+
   it('S1: proposes once, commits once, and releases contacts per counterparty pair only', async () => {
     chain();
     await start('alice', 'bob', 'carol');
@@ -372,7 +412,6 @@ describe('end to end', () => {
     const dawgLink = arr.links.find((l) => l.a === 'dawg' || l.b === 'dawg')!;
     expect(dawgLink.amountCents).toBe(20000);
     expect(arr.links.some((l) => l.payer && l.amountCents === null)).toBe(true);
-
     await service.approve('udawg', arr.id);
     expect(byState('proposed')[0]!.slots.find((s) => s.intentId === 'dawg')!.approval).toBe('approved');
     await expect(service.approve('uedward', arr.id)).rejects.toThrow(/price has not been set/);

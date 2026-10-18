@@ -116,7 +116,7 @@ type Ctx = {
   arrangements: string[];
   arrangementIds: Set<string>;
   conversation: string[];
-  communicationEvidence: { outbound: Array<'enqueued'>; inbound: Array<'enqueued'> };
+  communicationEvidence: NonNullable<import('../observability/evals.js').ChatTurnTrace['communicationEvidence']>;
 };
 
 // With several priced or unpriced cash lines there is no single "the price", so shortcuts keyed on it must not fire.
@@ -191,6 +191,19 @@ async function buildContext(userId: string): Promise<Ctx> {
   const handles = new Map<string, string>();
   for (const i of open) handles.set(i.intentId, i.ownerHandle);
   const entries = await negotiationLog().forIntents([...mineIds], 30);
+  const counterparties = [...new Set(open.filter((intent) => !mineIds.has(intent.intentId)).map((intent) => intent.ownerHandle))];
+  const outbound = entries.filter((entry) => mineIds.has(entry.from)).map((entry) => ({
+    counterparty: handles.get(entry.to) ?? entry.to,
+    status: 'enqueued' as const,
+  }));
+  const inbound = entries.filter((entry) => mineIds.has(entry.to)).map((entry) => ({
+    counterparty: handles.get(entry.from) ?? entry.from,
+    status: 'enqueued' as const,
+  }));
+  const accepted = entries.filter((entry) => entry.kind === 'accept').map((entry) => ({
+    counterparty: handles.get(mineIds.has(entry.from) ? entry.to : entry.from) ?? (mineIds.has(entry.from) ? entry.to : entry.from),
+    amountCents: entry.amountCents ?? 0,
+  }));
   const conversation = entries.filter((e) => e.kind !== 'say' || e.text).map((e) => {
     const who = (id: string): string => (mineIds.has(id) ? 'the user\'s agent' : `${handles.get(id) ?? 'the other agent'}'s agent`);
     const what = e.kind === 'offer' ? `offered ${money(e.amountCents ?? 0)}` : e.kind === 'accept' ? `accepted ${money(e.amountCents ?? 0)}` : e.kind === 'walk' ? 'walked away' : `said "${e.text}"`;
@@ -211,8 +224,14 @@ async function buildContext(userId: string): Promise<Ctx> {
     })),
     arrangementIds: new Set(live.map((a) => a.terms.arrangementId)),
     communicationEvidence: {
-      outbound: entries.filter((entry) => mineIds.has(entry.from)).map(() => 'enqueued' as const),
-      inbound: entries.filter((entry) => mineIds.has(entry.to)).map(() => 'enqueued' as const),
+      counterparties,
+      outbound,
+      inbound,
+      waitingFor: live.flatMap((arrangement) =>
+        arrangement.terms.proposal?.awaiting === 'counterparty'
+          ? [arrangement.terms.proposal.otherHandle]
+          : []),
+      accepted,
     },
   };
 }
@@ -453,16 +472,22 @@ async function runAgentChatTurn(input: AgentChatInput): Promise<AgentChatResult>
   const promptLeak = detectPromptLeak(reply, 'agent.chat', user.id);
   const ownIntentIds = new Set(ctx.own.map((intent) => intent.id));
   const communicationEvidence = {
-    outbound: [...ctx.communicationEvidence.outbound] as Array<'enqueued' | 'processed' | 'failed'>,
-    inbound: [...ctx.communicationEvidence.inbound] as Array<'enqueued' | 'processed' | 'failed'>,
+    ...ctx.communicationEvidence,
+    outbound: [...ctx.communicationEvidence.outbound],
+    inbound: [...ctx.communicationEvidence.inbound],
   };
   for (const entry of bus.log) {
     if (entry.type === 'signal') continue;
     const direction = ownIntentIds.has(entry.from) ? 'outbound' : ownIntentIds.has(entry.to) ? 'inbound' : undefined;
     if (!direction) continue;
+    const counterpartIntentId = direction === 'outbound' ? entry.to : entry.from;
+    const counterparty = ctx.others.find((other) => other.id === counterpartIntentId)?.handle ?? counterpartIntentId;
     const status = entry.status === 'processed' ? 'processed'
       : entry.status === 'enqueued' ? 'enqueued' : 'failed';
-    communicationEvidence[direction].push(status);
+    communicationEvidence[direction].push({ counterparty, status });
+    if (!communicationEvidence.counterparties.some((name) => name.toLowerCase() === counterparty.toLowerCase())) {
+      communicationEvidence.counterparties.push(counterparty);
+    }
   }
   recordChatEval({
     reply,

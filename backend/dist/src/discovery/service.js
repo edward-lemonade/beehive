@@ -2,6 +2,7 @@ import { clock } from '../clock.js';
 import { events } from '../events.js';
 import { getIntentRepository } from '../intents/service.js';
 import { nearMissBetween, directlyRelevant } from './match.js';
+import { primePairs } from './semantic.js';
 import { noticeRepository } from './notices.js';
 const COALESCE_MS = 250;
 const RECHECK_SIM_MS = 5 * 60 * 1000;
@@ -28,12 +29,13 @@ export async function refreshEdges(intentId) {
         return [];
     const [neighbors, existing] = await Promise.all([neighborsOf(self), notices.forObserver(intentId)]);
     const known = new Map(existing.map((n) => [n.intent, n]));
+    await primePairs(self.public, neighbors.map((o) => o.public));
     const now = clock.now();
     const writes = [];
     let changed = false;
     for (const other of neighbors) {
         const prior = known.get(other.id);
-        if (prior && prior.version === other.version && prior.observerVersion === self.version)
+        if (prior && prior.relevant && prior.version === other.version && prior.observerVersion === self.version)
             continue;
         const edge = directlyRelevant(self.public, other.public);
         writes.push({
@@ -106,10 +108,13 @@ export async function relevantTo(callerId, publicIntentId) {
     if (!target || target.state !== 'open' || target.ownerId === callerId)
         return null;
     const mine = (await repo.listMine(callerId)).filter((intent) => intent.state === 'open');
+    for (const intent of mine)
+        await primePairs(intent.public, [target.public]);
     const hit = mine.find((intent) => directlyRelevant(intent.public, target.public) !== null);
     return hit?.id ?? null;
 }
 const pending = new Set();
+const fanout = new Set();
 let flushTimer;
 function schedule(intentId) {
     pending.add(intentId);
@@ -117,17 +122,27 @@ function schedule(intentId) {
         return;
     flushTimer = setTimeout(() => {
         flushTimer = undefined;
-        const batch = [...pending];
-        pending.clear();
-        for (const id of batch) {
-            refreshEdges(id).catch((error) => console.error('refreshEdges failed', id, error));
-        }
+        // Neighbors of a newly opened intent are looked up now, not when the event fired, because the intent may not have been readable yet then.
+        const opened = [...fanout];
+        fanout.clear();
+        Promise.all(opened.map((id) => getNeighborhood(id).catch(() => [])))
+            .then((lists) => {
+            for (const list of lists)
+                for (const neighbor of list)
+                    pending.add(neighbor.intentId);
+        })
+            .finally(() => {
+            const batch = [...pending];
+            pending.clear();
+            for (const id of batch) {
+                refreshEdges(id).catch((error) => console.error('refreshEdges failed', id, error));
+            }
+        });
     }, COALESCE_MS);
 }
 async function onOpened(intentId) {
+    fanout.add(intentId);
     schedule(intentId);
-    for (const neighbor of await getNeighborhood(intentId))
-        schedule(neighbor.intentId);
 }
 async function onUpdated(intentId) {
     schedule(intentId);

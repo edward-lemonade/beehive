@@ -5,6 +5,7 @@ import { itemMatch } from '../discovery/match.js';
 import { candidatesBySlot, localStatus } from '../engine/index.js';
 import { events } from '../events.js';
 import { getIntentRepository } from '../intents/service.js';
+import { Sentry } from '../observability/telemetry.js';
 import { bus, makeEnvelope } from './bus.js';
 import { hooks } from './hooks.js';
 import { signalRepo } from './signals.js';
@@ -13,6 +14,7 @@ export class Agent {
     requestWake;
     dormant = false;
     notifiedVersion = -1;
+    edgeKey = null;
     constructor(intentId, requestWake) {
         this.intentId = intentId;
         this.requestWake = requestWake;
@@ -30,9 +32,13 @@ export class Agent {
         const [incomingRows, sentRows] = await Promise.all([store.to(self.id), store.from(self.id)]);
         const rowsByFrom = new Map(incomingRows.map((row) => [row.from, row]));
         // Absent or stale signals are assumed true so chains and cycles settle on the greatest fixed point.
+        // A new neighbor invalidates earlier verdicts: two agents that each saw only part of the picture can lock each other at false, so start over optimistically.
+        const edgeKey = edges.map((e) => `${e.other}@${e.otherVersion}`).sort().join('|');
+        const edgesChanged = edgeKey !== this.edgeKey;
+        this.edgeKey = edgeKey;
         const incoming = edges.map((edge) => {
             const row = rowsByFrom.get(edge.other);
-            const current = row !== undefined && row.fromVersion === edge.otherVersion && row.toVersion === self.version;
+            const current = !edgesChanged && row !== undefined && row.fromVersion === edge.otherVersion && row.toVersion === self.version;
             return {
                 from: edge.other,
                 to: self.id,
@@ -81,6 +87,19 @@ export class Agent {
     async onMessage(env) {
         const body = env.body;
         if (body.type === 'signal') {
+            const repository = getIntentRepository();
+            const [sender, recipient] = await Promise.all([
+                repository.get(env.from),
+                repository.get(env.to),
+            ]);
+            Sentry.getActiveSpan()?.setAttributes({
+                'bus.sender.version_expected': body.fromVersion,
+                'bus.sender.version_observed': sender?.version ?? -1,
+                'bus.sender.version_matches': sender?.version === body.fromVersion,
+                'bus.receiver.version_expected': body.toVersion,
+                'bus.receiver.version_observed': recipient?.version ?? -1,
+                'bus.receiver.version_matches': recipient?.version === body.toVersion,
+            });
             await signalRepo().upsert({
                 from: env.from,
                 to: env.to,
@@ -105,13 +124,16 @@ export class Agent {
             return { ok: false, reason: 'Net result is below the minimum' };
         }
         // Cash is covered by the net check; itemMatch never matches cash.
+        // The matcher's vetted edges count too: an LLM verdict can accept items whose labels differ.
+        const edges = await getEdges(self.id);
+        const same = (a, b) => a.kind === b.kind && a.label === b.label;
         for (const item of terms.give.filter((i) => i.kind !== 'cash')) {
-            if (!self.public.give.some((offered) => itemMatch(offered, item))) {
+            if (!self.public.give.some((offered) => itemMatch(offered, item)) && !edges.some((e) => e.selfGives.some((g) => same(g.item, item)))) {
                 return { ok: false, reason: 'Item is not offered by this intent' };
             }
         }
         for (const item of terms.receive.filter((i) => i.kind !== 'cash')) {
-            if (!self.public.want.some((slot) => itemMatch(item, slot))) {
+            if (!self.public.want.some((slot) => itemMatch(item, slot)) && !edges.some((e) => e.selfWants.some((w) => same(w.item, item)))) {
                 return { ok: false, reason: 'Item is not wanted by this intent' };
             }
         }

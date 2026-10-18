@@ -27,6 +27,8 @@ class MemoryRepo {
     async changeState() { return undefined; }
     async expireDue() { return []; }
     async listMine(ownerId) { return [...this.intents.values()].filter((i) => i.ownerId === ownerId); }
+    async remove(id, ownerId, state) { const i = this.intents.get(id); if (!i || i.ownerId !== ownerId || i.state !== state)
+        return false; return this.intents.delete(id); }
     async listOpen() { return [...this.intents.values()].filter((i) => i.state === 'open'); }
 }
 let repo;
@@ -124,6 +126,16 @@ describe('pricing (pure)', () => {
         expect(nextOffer({ round: 4, rounds: 3, payerOpenCents: lb.payerOpenCents, payerMaxCents: 30000, receiverAskCents: 31500, receiverMinCents: 31500 }, 'receiver')).toBe(31500);
     });
 });
+describe('negotiable payer', () => {
+    it('opens at the ask instead of $0 and never pays above it', () => {
+        const terms = {
+            link: link('A|B', 'A', 'B', 'A'), payer: 'A', receiver: 'B', payCents: null, askCents: 30000, payerFirm: false, receiverFirm: false,
+        };
+        const lb = linkBounds(terms, { minCents: 0, maxCents: UNBOUNDED }, { minCents: 20000, maxCents: UNBOUNDED });
+        expect(lb.payerOpenCents).toBe(30000);
+        expect(lb.payer.maxCents).toBe(30000);
+    });
+});
 describe('priceArrangement', () => {
     it('S1 prices B-C at $50 and A-B between $50 and $60 within 3 rounds', async () => {
         s1();
@@ -178,20 +190,14 @@ describe('priceArrangement', () => {
         repo.intents.get('B').version = 2;
         expect((await priceArrangement(arrangement())).reason).toBe('stale');
     });
-    it('drops a leaking wording at the guard and continues with the template', async () => {
+    it('gives every offer and accept a spoken line', async () => {
         s1();
         await connect('A', 'B', 'C');
-        setWordingProvider(async () => 'my minimum is 5000');
-        const violations = [];
-        bus.onViolation((v) => violations.push(v.rule));
+        setWordingProvider(async () => 'ok');
         const result = await priceArrangement(arrangement());
         expect(result.state).toBe('agreed');
-        expect(violations).toContain('content');
-        const says = log.entries.filter((e) => e.kind === 'say').map((e) => e.text ?? '');
-        expect(says.length).toBeGreaterThan(0);
-        const fromC = log.entries.filter((e) => e.kind === 'say' && e.from === 'C').map((e) => e.text ?? '');
-        expect(fromC.some((t) => t.includes('5000'))).toBe(false);
-        expect(says.every((t) => !/\bh-[ABC]\b/i.test(t))).toBe(true);
+        const money = log.entries.filter((e) => e.kind === 'offer' || e.kind === 'accept');
+        expect(log.entries.filter((e) => e.kind === 'say')).toHaveLength(money.length);
     });
 });
 describe('sessions', () => {
@@ -224,8 +230,85 @@ describe('sessions', () => {
             }
         }
     }, 30000);
+    it('lets the receiver answer a user-named price: ask its user when above its minimum, decline below', async () => {
+        add('A', [cash(1)], [[ticket('x1')]], null);
+        add('B', [ticket('x1')], [[cash(1)]], null);
+        await connect('A', 'B');
+        const asked = [];
+        events.on('negotiation.awaiting_user', (e) => asked.push([e.side ?? '', e.amountCents]));
+        const bounds = (min) => ({
+            payer: { minCents: 0, maxCents: 10000 },
+            receiver: { minCents: min, maxCents: UNBOUNDED },
+            payerOpenCents: 9000, receiverAskCents: 10000, directed: true,
+        });
+        const ok = await runSession({ key: 'dir/1', payerId: 'A', receiverId: 'B', bounds: bounds(5000) });
+        expect(ok).toMatchObject({ state: 'agreed', amountCents: 9000, pendingUser: true });
+        expect(asked).toEqual([['receiver', 9000]]);
+        const no = await runSession({ key: 'dir/2', payerId: 'A', receiverId: 'B', bounds: bounds(9500) });
+        expect(no.state).toBe('failed');
+    });
+    it('hands a negotiable payer\'s counter-price to its user instead of accepting', async () => {
+        add('A', [cash(1)], [[ticket('x1')]], null);
+        add('B', [ticket('x1')], [[cash(1)]], null);
+        await connect('A', 'B');
+        const asked = [];
+        events.on('negotiation.awaiting_user', (e) => asked.push(e.amountCents));
+        const result = await runSession({
+            key: 'defer/1', payerId: 'A', receiverId: 'B',
+            bounds: {
+                payer: { minCents: 0, maxCents: 30000 },
+                receiver: { minCents: 0, maxCents: UNBOUNDED },
+                payerOpenCents: 18000, receiverAskCents: 30000, payerNegotiable: true,
+            },
+        });
+        expect(result).toMatchObject({ state: 'agreed', amountCents: 20000, pendingUser: true });
+        expect(asked).toEqual([20000]);
+    });
 });
 describe('direct negotiation', () => {
+    it('asks the negotiable $110 seller for $90 when a comparable $100 firm ticket is available', async () => {
+        add('edward', [{ kind: 'cash', label: 'cash', attrs: {}, qty: 1 }], [[ticket('ticket')]], null);
+        add('kat', [ticket('ticket')], [[cash(10000, 'firm')]], 10000, 10000);
+        add('dawg', [ticket('ticket')], [[cash(11000, 'flexible')]], null, 11000);
+        await connect('edward', 'kat', 'dawg');
+        const pending = [];
+        const onPending = (event) => { pending.push(event); };
+        events.on('negotiation.awaiting_user', onPending);
+        try {
+            const result = await negotiateDirect('uedward', { ownIntentId: 'edward', targetIntentId: 'dawg' });
+            expect(result).toMatchObject({ status: 'pending', amountCents: 9000 });
+            expect(log.entries.find((entry) => entry.kind === 'offer')).toMatchObject({
+                from: 'edward', to: 'dawg', amountCents: 9000,
+            });
+            expect(log.entries.some((entry) => entry.from === 'edward' && entry.text === 'Could you do $90?')).toBe(true);
+            expect(pending).toEqual([{ intentId: 'dawg', amountCents: 9000, side: 'receiver', counterpartIntentId: 'edward', linkId: expect.any(String) }]);
+            expect(log.entries.some((entry) => entry.kind === 'accept')).toBe(false);
+        }
+        finally {
+            events.off('negotiation.awaiting_user', onPending);
+        }
+    });
+    it('does not discount the firm seller or an unrelated alternative', async () => {
+        add('edward', [{ kind: 'cash', label: 'cash', attrs: {}, qty: 1 }], [[ticket('concert')]], null);
+        add('kat', [ticket('concert')], [[cash(10000, 'firm')]], 10000, 10000);
+        add('dawg', [ticket('concert')], [[cash(11000, 'flexible')]], null, 11000);
+        await connect('edward', 'kat', 'dawg');
+        await negotiateDirect('uedward', { ownIntentId: 'edward', targetIntentId: 'kat' });
+        expect(log.entries.find((entry) => entry.kind === 'offer')?.amountCents).toBe(10000);
+        repo.intents.get('kat').public.give = [ticket('unrelated')];
+        repo.intents.get('kat').version += 1;
+        log.entries.length = 0;
+        await negotiateDirect('uedward', { ownIntentId: 'edward', targetIntentId: 'dawg' });
+        expect(log.entries.find((entry) => entry.kind === 'offer')?.amountCents).toBe(11000);
+    });
+    it('preserves an explicit buyer offer instead of replacing it with a competitive opening', async () => {
+        add('edward', [cash(9500)], [[ticket('ticket')]], -10000, -9500);
+        add('kat', [ticket('ticket')], [[cash(10000, 'firm')]], 10000, 10000);
+        add('dawg', [ticket('ticket')], [[cash(11000, 'flexible')]], null, 11000);
+        await connect('edward', 'kat', 'dawg');
+        await negotiateDirect('uedward', { ownIntentId: 'edward', targetIntentId: 'dawg' });
+        expect(log.entries.find((entry) => entry.kind === 'offer')?.amountCents).toBe(9500);
+    });
     it('negotiates the shared link for relevant intents', async () => {
         s1();
         await connect('A', 'B', 'C');

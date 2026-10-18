@@ -104,6 +104,11 @@ export function stopArrangementTimers(): void {
   for (const key of [...timers.keys()]) clearTimer(key);
 }
 
+export async function clearForUsers(userIds: string[]): Promise<void> {
+  const arrangementIds = await arrangementRepo().removeForUsers(userIds);
+  for (const arrangementId of arrangementIds) clearArrangementTimers(arrangementId);
+}
+
 // ---- helpers ---------------------------------------------------------------------------------
 
 const toContract = (arr: StoredArrangement): Arrangement => ({
@@ -519,7 +524,9 @@ export function approve(userId: string, arrangementId: string, input: { expected
         throw new ArrangementError('Your proposal is waiting for the other user to answer', 409);
       }
       const link = arr.links.find((entry) => entry.id === arr.proposal!.linkId);
-      if (link && (link.a === slot.intentId || link.b === slot.intentId)) return acceptProposalLocked(arr, slot);
+      if (link && (link.a === slot.intentId || link.b === slot.intentId)) {
+        return acceptProposalLocked(arr, slot);
+      }
     }
     await approveSlotLocked(arr, slot);
   });
@@ -652,7 +659,6 @@ export function negotiateFurther(
   return locked(arrangementId, async (): Promise<FurtherResult> => {
     const { arr, slot } = await participantContext(userId, arrangementId);
     if (arr.state !== 'proposed') throw notProposed();
-    // A user who already approved may still counter: a changed price clears their approval so they re-approve the new terms.
     if (slot.approval !== 'requested' && slot.approval !== 'approved') throw new ArrangementError('Only an open request can be renegotiated', 409);
 
     const cashLinks = arr.links.filter((l) => l.payer && (l.a === slot.intentId || l.b === slot.intentId));
@@ -664,7 +670,6 @@ export function negotiateFurther(
       : toName.length === 1 ? toName[0]
       : unpricedLinks.length === 1 ? unpricedLinks[0] : undefined;
     if (!link) throw new ArrangementError('Choose which cash link to renegotiate', 400);
-
     const side = link.payer === slot.intentId ? 'payer' : 'receiver';
     const open = arr.proposal;
     if (open && open.linkId === link.id && input.targetCents !== undefined) {

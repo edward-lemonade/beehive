@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { requireAuth } from '../auth.js';
-import { answerDraft, confirmDraft, createDraft, editIntent, getOwnedDraft, IntentServiceError, listMine, listPublicIntents, reopenIntent, withdrawIntent, } from './service.js';
+import { answerDraft, confirmDraft, createDraft, editIntent, getOwnedDraft, IntentServiceError, listMine, listPublicIntents, reopenIntent, deleteIntent, withdrawIntent, } from './service.js';
 const draftInputSchema = z.object({ text: z.string().trim().min(1) });
 const answerInputSchema = z.object({ text: z.string().trim().min(1) });
 const editInputSchema = z.object({ text: z.string().trim().min(1) });
@@ -42,7 +42,7 @@ intentsRouter.post('/draft/:id/confirm', async (c) => {
     const user = c.get('user');
     try {
         getOwnedDraft(c.req.param('id'), user.id);
-        const confirmed = await confirmDraft(c.req.param('id'), user.id, { handle: user.handle, tier: user.tier });
+        const confirmed = await confirmDraft(c.req.param('id'), user.id, { handle: user.handle, tier: user.tier, imageUrl: user.imageUrl });
         return c.json({ ok: true, intents: confirmed.map((intent) => ({
                 id: intent.id,
                 version: intent.version,
@@ -77,6 +77,15 @@ intentsRouter.patch('/:id', async (c) => {
 intentsRouter.post('/:id/withdraw', async (c) => {
     try {
         await withdrawIntent(c.req.param('id'), c.get('user').id);
+        return c.json({ ok: true });
+    }
+    catch (error) {
+        return failure(error, c);
+    }
+});
+intentsRouter.delete('/:id', async (c) => {
+    try {
+        await deleteIntent(c.req.param('id'), c.get('user').id);
         return c.json({ ok: true });
     }
     catch (error) {

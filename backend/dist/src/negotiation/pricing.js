@@ -1,4 +1,6 @@
 export const UNBOUNDED = Number.MAX_SAFE_INTEGER;
+// A buyer who named no price never gets a number made up for them: the agent starts at the seller's ask and the user decides.
+const NEGOTIABLE_OPEN_SHARE = 1;
 export function withinBounds(side, amountCents, bounds) {
     if (!Number.isInteger(amountCents))
         return false;
@@ -41,16 +43,27 @@ export function deriveLinkBounds(party, target, all, pricedSoFar) {
     let minCents = limit === null ? 0 : Math.max(0, limit - net);
     if (target.receiverFirm && target.askCents !== null)
         minCents = Math.max(minCents, target.askCents);
-    return { minCents, maxCents: UNBOUNDED };
+    const floorStated = (target.receiverFirm && target.askCents !== null)
+        || (party.minNetCents !== null && party.minNetCents !== party.declaredNetCents);
+    return { minCents, maxCents: UNBOUNDED, floorStated };
 }
 export function linkBounds(target, payerBounds, receiverBounds, anchors = {}) {
-    const open = target.payerFirm ? payerBounds.maxCents : (anchors.payerOpenCents ?? target.payCents ?? 0);
     const ask = target.receiverFirm ? receiverBounds.minCents : (anchors.receiverAskCents ?? target.askCents ?? receiverBounds.minCents);
+    // A payer with no stated price opens at a share of the ask and never pays more than the ask.
+    const unstated = target.payCents === null && !target.payerFirm && ask > 0;
+    const negotiable = unstated && anchors.payerOpenCents === undefined;
+    const payer = unstated && payerBounds.maxCents > ask ? { ...payerBounds, maxCents: ask } : payerBounds;
+    const open = target.payerFirm
+        ? payer.maxCents
+        : (anchors.payerOpenCents ?? target.payCents ?? (negotiable ? (anchors.competitiveOpenCents ?? Math.round(ask * NEGOTIABLE_OPEN_SHARE)) : 0));
     return {
-        payer: payerBounds,
+        payer,
         receiver: receiverBounds,
-        payerOpenCents: Math.max(0, Math.min(open, payerBounds.maxCents)),
+        payerOpenCents: Math.max(0, Math.min(open, payer.maxCents)),
         receiverAskCents: Math.max(ask, receiverBounds.minCents),
+        payerNegotiable: unstated && anchors.payerOpenCents === undefined,
+        directed: anchors.payerOpenCents !== undefined,
+        sellerLed: anchors.receiverAskCents !== undefined,
     };
 }
 // Prefer links where a participant has no other unpriced cash link; ties go to the lowest id.

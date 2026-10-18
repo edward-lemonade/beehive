@@ -46,7 +46,21 @@ export function termsView(arr, slot, intents, expiresAt) {
     const cashOut = [];
     const cashIn = [];
     const counterparties = new Set();
-    for (const link of arr.links) {
+    const unpriced = [];
+    const proposedLink = arr.state === 'proposed' && arr.proposal
+        ? arr.links.find((link) => link.id === arr.proposal.linkId && (link.a === me || link.b === me))
+        : undefined;
+    const proposal = proposedLink && arr.proposal ? {
+        amountCents: arr.proposal.amountCents,
+        otherHandle: handleOf(arr, intents, proposedLink.a === me ? proposedLink.b : proposedLink.a),
+        awaiting: arr.proposal.fromIntentId === me ? 'counterparty' : 'user',
+        ...(arr.proposal.source ? { source: arr.proposal.source } : {}),
+    } : undefined;
+    const visible = proposal ? {
+        ...arr,
+        links: arr.links.map((link) => link.id === proposedLink.id ? { ...link, amountCents: proposal.amountCents } : link),
+    } : arr;
+    for (const link of visible.links) {
         if (link.a !== me && link.b !== me)
             continue;
         const other = link.a === me ? link.b : link.a;
@@ -57,6 +71,13 @@ export function termsView(arr, slot, intents, expiresAt) {
             if (flow.to === me)
                 gets.push({ item: flow.item, fromHandle: handleOf(arr, intents, other) });
         }
+        if (link.payer && link.amountCents === null) {
+            unpriced.push({
+                otherHandle: handleOf(arr, intents, other),
+                role: link.payer === me ? 'buyer' : 'seller',
+                items: link.flows.filter((f) => (link.payer === me ? f.to === me : f.from === me)).map((f) => f.item.label),
+            });
+        }
         if (link.payer && link.amountCents !== null) {
             if (link.payer === me)
                 cashOut.push({ toHandle: handleOf(arr, intents, other), amountCents: link.amountCents });
@@ -65,7 +86,7 @@ export function termsView(arr, slot, intents, expiresAt) {
         }
     }
     const intent = intents.get(me);
-    const net = netFor(arr, me);
+    const net = netFor(visible, me);
     const participants = arr.slots.filter((s) => s.approval !== 'void').length;
     return {
         arrangementId: arr.id,
@@ -83,40 +104,7 @@ export function termsView(arr, slot, intents, expiresAt) {
         declaredNetCents: intent.private.declaredNetCents,
         grade: gradeOf(net, intent),
         otherParticipants: Math.max(0, participants - 1 - counterparties.size),
+        ...(unpriced.length > 0 ? { unpriced } : {}),
+        ...(proposal ? { proposal } : {}),
     };
-}
-const money = (cents) => `$${(cents / 100).toFixed(2)}`;
-export function buildChecklist(arr, slot, intents, contactOf) {
-    const me = slot.intentId;
-    const incoming = [];
-    const outgoing = [];
-    for (const link of arr.links) {
-        if (link.a !== me && link.b !== me)
-            continue;
-        const other = link.a === me ? link.b : link.a;
-        const handle = handleOf(arr, intents, other);
-        const contact = contactOf(arr.slots.find((s) => s.intentId === other)?.userId ?? '');
-        const base = { counterpartyHandle: handle, contact, done: false };
-        link.flows.forEach((flow, index) => {
-            if (flow.to === me) {
-                incoming.push({ ...base, id: `get:${link.id}:${index}`, kind: 'get',
-                    description: `Receive ${flow.item.qty} x ${flow.item.label} from ${handle}` });
-            }
-            else if (flow.from === me) {
-                outgoing.push({ ...base, id: `give:${link.id}:${index}`, kind: 'give',
-                    description: `Hand over ${flow.item.qty} x ${flow.item.label} to ${handle}` });
-            }
-        });
-        if (link.payer && link.amountCents !== null && link.amountCents > 0) {
-            if (link.payer === me) {
-                outgoing.push({ ...base, id: `cash_out:${link.id}`, kind: 'cash_out',
-                    description: `Pay ${money(link.amountCents)} to ${handle}` });
-            }
-            else {
-                incoming.push({ ...base, id: `cash_in:${link.id}`, kind: 'cash_in',
-                    description: `Collect ${money(link.amountCents)} from ${handle}` });
-            }
-        }
-    }
-    return [...incoming, ...outgoing];
 }

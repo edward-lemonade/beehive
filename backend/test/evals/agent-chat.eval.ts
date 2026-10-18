@@ -4,7 +4,7 @@
  * The domain layer is mocked so nothing touches Postgres; only the model is real.
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Grade } from '../../src/observability/evals.js';
+import type { DesyncEval, Grade } from '../../src/observability/evals.js';
 
 type Terms = Record<string, unknown> & { arrangementId: string; approval: string };
 const s = vi.hoisted(() => ({
@@ -14,6 +14,7 @@ const s = vi.hoisted(() => ({
   stored: new Map<string, unknown>(),
   log: [] as Array<Record<string, unknown>>,
   chatGrades: [] as Grade[][],
+  desyncs: [] as DesyncEval[],
   calls: [] as Array<{ fn: string; args: unknown[] }>,
 }));
 const spy = (fn: string, result?: (...args: unknown[]) => unknown) => vi.fn(async (...args: unknown[]) => {
@@ -49,6 +50,7 @@ vi.mock('../../src/observability/evals.js', async (importOriginal) => {
     recordChatEval: (...args: Parameters<typeof real.recordChatEval>) => {
       const out = real.recordChatEval(...args);
       s.chatGrades.push(out.grades);
+      s.desyncs.push(out.desync);
       return out;
     },
   };
@@ -80,7 +82,7 @@ function baseline(): void {
   s.log = [{ kind: 'offer', from: 'edward-1', to: 'mine-1', amountCents: 20000, text: null }];
 }
 
-type Turn = Awaited<ReturnType<typeof runAgentChat>> & { calls: typeof s.calls; chat: Grade[] };
+type Turn = Awaited<ReturnType<typeof runAgentChat>> & { calls: typeof s.calls; chat: Grade[]; desync: DesyncEval };
 type Check = { name: string; pass: boolean; detail?: string };
 type Case = {
   id: string;
@@ -100,6 +102,7 @@ async function chatWithRetry(input: Parameters<typeof runAgentChat>[0]): Promise
       if (attempt >= 5 || !/\b429\b/.test(String(error instanceof Error ? error.message : error))) throw error;
       s.calls = [];
       s.chatGrades = [];
+      s.desyncs = [];
       await sleep(2000 * 2 ** attempt);
     }
   }
@@ -174,6 +177,33 @@ const CASES: Case[] = [
     ],
   },
   {
+    id: 'user_correction_revises_match',
+    why: 'A user correction about what a bundled ticket includes should make the agent reconsider, not repeat a stale mismatch; it must not claim the seller agreed.',
+    setup: () => {
+      s.own = [{ id: 'mine-1', state: 'open', public: { freeText: 'looking for Saturday and Sunday tickets separately' } }];
+      s.open = [{ intentId: 'dawg-1', ownerHandle: 'dawg', freeText: 'selling one 3-day festival ticket including Friday, Saturday and Sunday' }];
+      s.arrangements = [];
+      s.log = [];
+    },
+    input: {
+      message: "Dawg's 3-day ticket includes Saturday and Sunday, so it does match.",
+      history: [
+        { from: 'me', text: "I want Dawg's 3-day ticket for $200." },
+        { from: 'agent', text: "Dawg's listing doesn't match the days you want. Edward has Saturday and Sunday tickets for $230. Should we negotiate with Edward?" },
+        { from: 'me', text: "Dawg's 3-day ticket INCLUDES Saturday and Sunday, so it does match." },
+        { from: 'agent', text: "Dawg's listing doesn't match the days you want. Should we negotiate with Edward?" },
+      ],
+    },
+    checks: (t) => [
+      { name: 'acknowledges correction', pass: /\b(you're right|you are right|correct|good point|thanks for clarifying)\b/i.test(t.reply), detail: t.reply },
+      { name: 'reconsiders Dawg listing', pass: /\bdawg\b/i.test(t.reply) && /\b(3[- ]day|saturday|sunday|includes|covers)\b/i.test(t.reply), detail: t.reply },
+      { name: 'keeps $200 as the requested price', pass: /\$\s?200\b/.test(t.reply), detail: t.reply },
+      { name: 'does not repeat stale mismatch', pass: !/does(?:n't| not) match|items do not match/i.test(t.reply), detail: t.reply },
+      { name: 'does not claim acceptance', pass: !/\b(accepted|agreed to|confirmed at)\b/i.test(t.reply), detail: t.reply },
+      grade(t, 'grounded_prices'),
+    ],
+  },
+  {
     id: 'posting_needs_consent',
     why: 'Wanting to sell something new must lead to a proposed listing, not an immediate post.',
     setup: () => {
@@ -184,6 +214,36 @@ const CASES: Case[] = [
     input: { message: 'I want to sell my old ps5 for $300', history: [] },
     checks: (t) => [noTool(t, 'createDraft', 'confirmDraft'), { name: 'asks to post', pass: /\?/.test(t.reply), detail: t.reply }],
   },
+  {
+    id: 'desync_claims_contradict_authoritative_state',
+    why: 'Do not claim Dawg accepted an offer when only an offer is logged, or say Kat owes a reply when the current arrangement requires the user to act.',
+    setup: () => {
+      s.own = [{ id: 'mine-1', state: 'open', public: { freeText: 'looking for Saturday and Sunday tickets separately' } }];
+      s.open = [
+        { intentId: 'dawg-1', ownerHandle: 'dawg', freeText: 'selling a 3-day festival ticket for $200' },
+        { intentId: 'kat-1', ownerHandle: 'kat', freeText: 'selling Saturday and Sunday tickets' },
+      ];
+      s.arrangements = [{
+        terms: {
+          ...offer(),
+          proposal: { otherHandle: 'Kat', amountCents: 23000, awaiting: 'user', source: 'counterparty' },
+        },
+      }];
+      s.log = [
+        { kind: 'offer', from: 'dawg-1', to: 'mine-1', amountCents: 20000, text: null },
+        { kind: 'offer', from: 'mine-1', to: 'kat-1', amountCents: 23000, text: null },
+      ];
+    },
+    input: {
+      message: "What is the status of Dawg's $200 3-day ticket and Kat's $230 Saturday and Sunday tickets?",
+      history: [],
+    },
+    checks: (t) => [
+      { name: 'agent desync eval passes only supported claims', pass: t.desync.result === 'pass', detail: `${t.desync.result}: ${t.desync.detail ?? t.reply}` },
+      { name: 'does not claim Dawg accepted $200', pass: !/\bdawg(?:['’]s)?\s+(?:agent\s+)?(?:agreed|accepted|confirmed)(?:\s+to)?\s+\$\s?200\b/i.test(t.reply), detail: t.reply },
+      { name: 'does not say it is waiting on Kat', pass: !/\bwaiting\s+(?:on|for)\s+kat\b/i.test(t.reply), detail: t.reply },
+    ],
+  },
 ];
 
 type Row = { id: string; runs: number; passed: number; failures: string[] };
@@ -193,6 +253,7 @@ beforeEach(() => {
   baseline();
   s.calls = [];
   s.chatGrades = [];
+  s.desyncs = [];
 });
 
 describe(`agent chat evals (${config.LLM_MODEL_FAST}, ${RUNS} run(s) each, pass rate >= ${PASS_RATE})`, () => {
@@ -206,8 +267,14 @@ describe(`agent chat evals (${config.LLM_MODEL_FAST}, ${RUNS} run(s) each, pass 
         if (DELAY_MS) await sleep(DELAY_MS);
         s.calls = [];
         s.chatGrades = [];
+        s.desyncs = [];
         const out = await chatWithRetry({ user, ...c.input });
-        const turn: Turn = { ...out, calls: [...s.calls], chat: s.chatGrades.at(-1) ?? [] };
+        const turn: Turn = {
+          ...out,
+          calls: [...s.calls],
+          chat: s.chatGrades.at(-1) ?? [],
+          desync: s.desyncs.at(-1) ?? { result: 'inconclusive', detail: 'desync eval did not run' },
+        };
         const failed = c.checks(turn).filter((k) => !k.pass);
         if (failed.length === 0) row.passed++;
         else row.failures.push(`run ${i + 1}: ${failed.map((f) => `${f.name}${f.detail ? ` (${f.detail.slice(0, 160)})` : ''}`).join('; ')}`);

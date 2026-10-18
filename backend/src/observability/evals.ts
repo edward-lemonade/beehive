@@ -12,8 +12,11 @@ export type ChatTurnTrace = {
   userInjection: boolean;
   flaggedListingsInContext: number;
   communicationEvidence?: {
-    outbound: Array<'enqueued' | 'processed' | 'failed'>;
-    inbound: Array<'enqueued' | 'processed' | 'failed'>;
+    counterparties: string[];
+    outbound: Array<{ counterparty: string; status: 'enqueued' | 'processed' | 'failed' }>;
+    inbound: Array<{ counterparty: string; status: 'enqueued' | 'processed' | 'failed' }>;
+    waitingFor: string[];
+    accepted: Array<{ counterparty: string; amountCents: number }>;
   };
 };
 
@@ -23,27 +26,58 @@ export type DesyncEval = { result: 'pass' | 'fail' | 'inconclusive'; detail?: st
 const OUTBOUND_COMMUNICATION_CLAIM = /\b(?:i|we|my agent|our agent)\s+(?:(?:have|has|had|already|just|previously|['’]ve|['’]d)\s+)*(?:told|asked|messaged|contacted|notified|spoke|talked|reached out|sent|been in touch)\b/i;
 const INBOUND_COMMUNICATION_CLAIM = /\b(?:they|the other agent|@[\w.-]+)\s+(?:(?:have|has|had|already|just|previously|['’]ve)\s+)*(?:told|asked|messaged|contacted|notified|replied|responded|sent|offered|accepted|declined|said|spoke|talked)\b|\b(?:i|we)\s+(?:(?:have|had)\s+)?heard back\b/i;
 
+const normalizedName = (name: string): string => name.replace(/^@/, '').replace(/['’]s$/i, '').toLowerCase();
+const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const mentionsNamedParty = (reply: string, name: string, after: RegExp): boolean => {
+  return new RegExp(`\\b@?${escapeRegex(name)}(?:['’]s)?\\s+(?:agent\\s+)?${after.source}`, 'i').test(reply);
+};
+
 /** A focused delivery-consistency eval, intentionally separate from the general chat score. */
 export function gradeAgentDesync(
   reply: string,
-  evidence: ChatTurnTrace['communicationEvidence'] = { outbound: [], inbound: [] },
+  evidence: ChatTurnTrace['communicationEvidence'] = { counterparties: [], outbound: [], inbound: [], waitingFor: [], accepted: [] },
 ): DesyncEval {
+  const counterparty = (name: string): string | undefined =>
+    evidence.counterparties.find((candidate) => normalizedName(candidate) === normalizedName(name));
+  const waitingClaims = [...reply.matchAll(/\bwait(?:ing)?\s+(?:on|for)\s+@?([\p{L}\w.-]+)(?:['’]s)?(?:\s+(?:answer|reply|response))?/giu)]
+    .map((match) => match[1]!)
+    .filter((name) => !['the', 'them', 'their', 'someone'].includes(name.toLowerCase()));
+  for (const claimed of waitingClaims) {
+    const name = counterparty(claimed);
+    if (!name || !evidence.waitingFor.some((waiting) => normalizedName(waiting) === normalizedName(name))) {
+      return { result: 'fail', detail: `waiting claim does not match authoritative pending party: ${claimed}` };
+    }
+  }
+
+  const statusClaims = /\b(?:agreed|accepted|confirmed)\b/i;
+  const claimedAgreements = evidence.counterparties.filter((name) => mentionsNamedParty(reply, name, statusClaims));
+  for (const name of claimedAgreements) {
+    const priceMatch = new RegExp(`\\b@?${escapeRegex(name)}(?:['’]s)?\\s+(?:agent\\s+)?(?:agreed|accepted|confirmed)(?:\\s+to)?\\s+\\$\\s?([\\d,]+(?:\\.\\d{1,2})?)`, 'i').exec(reply);
+    const claimedCents = priceMatch ? Math.round(Number(priceMatch[1]!.replace(/,/g, '')) * 100) : undefined;
+    const verified = evidence.accepted.some((entry) =>
+      normalizedName(entry.counterparty) === normalizedName(name)
+      && (claimedCents === undefined || entry.amountCents === claimedCents));
+    if (!verified) return { result: 'fail', detail: `agreement claim about ${name} has no matching accepted offer` };
+  }
+
   const claimsOutbound = OUTBOUND_COMMUNICATION_CLAIM.test(reply);
   const claimsInbound = INBOUND_COMMUNICATION_CLAIM.test(reply);
-  if (!claimsOutbound && !claimsInbound) return { result: 'pass' };
+  if (!claimsOutbound && !claimsInbound && waitingClaims.length === 0 && claimedAgreements.length === 0) return { result: 'pass' };
 
+  const relevantStatuses = (rows: NonNullable<ChatTurnTrace['communicationEvidence']>['outbound'], known: string[]) =>
+    rows.filter((row) => !known.length || known.some((name) => normalizedName(name) === normalizedName(row.counterparty)));
+  const namedParties = evidence.counterparties.filter((name) =>
+    new RegExp(`\\b@?${escapeRegex(name)}(?:['’]s)?\\b`, 'i').test(reply));
+  const outbound = relevantStatuses(evidence.outbound, namedParties);
+  const inbound = relevantStatuses(evidence.inbound, namedParties);
   const unsupported: string[] = [];
   const pending: string[] = [];
-  if (claimsOutbound) {
-    if (evidence.outbound.includes('processed')) {
-      // A processed message confirms at least one outbound contact in this process.
-    } else if (evidence.outbound.includes('enqueued')) pending.push('outbound');
+  if (claimsOutbound && !outbound.some((message) => message.status === 'processed')) {
+    if (outbound.some((message) => message.status === 'enqueued')) pending.push('outbound');
     else unsupported.push('outbound');
   }
-  if (claimsInbound) {
-    if (evidence.inbound.includes('processed')) {
-      // A processed message confirms at least one inbound contact in this process.
-    } else if (evidence.inbound.includes('enqueued')) pending.push('inbound');
+  if (claimsInbound && !inbound.some((message) => message.status === 'processed')) {
+    if (inbound.some((message) => message.status === 'enqueued')) pending.push('inbound');
     else unsupported.push('inbound');
   }
   if (unsupported.length) return { result: 'fail', detail: `unsupported ${unsupported.join(' and ')} communication claim` };
@@ -105,23 +139,14 @@ export function recordChatEval(turn: ChatTurnTrace, attrs: { trigger: 'message' 
   for (const g of grades) {
     metric.count('agent.eval.grade', { ...tags, grader: g.name, result: g.pass ? 'pass' : 'fail' });
     recordEvalResult({ name: g.name, source: 'live', pass: g.pass, detail: g.detail, attrs: { 'eval.trigger': attrs.trigger, 'eval.injected_context': tags.injected_context } });
-    if (g.pass) continue;
-    Sentry.withScope((scope) => {
-      scope.setLevel('warning');
-      scope.setFingerprint(['agent-eval', g.name]);
-      scope.setTags({ 'eval.grader': g.name, 'eval.trigger': attrs.trigger, 'eval.injected_context': String(tags.injected_context) });
-      scope.setContext('eval', { score, failed: g.name, detail: g.detail ?? null, actions: turn.actions, toolOutcomes: turn.toolOutcomes });
-      scope.setUser({ id: attrs.userId });
-      Sentry.captureMessage(`Agent eval failed: ${g.name}`);
-    });
   }
   recordAgentDesyncEval(desync, {
     trigger: attrs.trigger,
     userId: attrs.userId,
-    outboundProcessed: turn.communicationEvidence?.outbound.filter((s) => s === 'processed').length ?? 0,
-    outboundPending: turn.communicationEvidence?.outbound.filter((s) => s === 'enqueued').length ?? 0,
-    inboundProcessed: turn.communicationEvidence?.inbound.filter((s) => s === 'processed').length ?? 0,
-    inboundPending: turn.communicationEvidence?.inbound.filter((s) => s === 'enqueued').length ?? 0,
+    outboundProcessed: turn.communicationEvidence?.outbound.filter((message) => message.status === 'processed').length ?? 0,
+    outboundPending: turn.communicationEvidence?.outbound.filter((message) => message.status === 'enqueued').length ?? 0,
+    inboundProcessed: turn.communicationEvidence?.inbound.filter((message) => message.status === 'processed').length ?? 0,
+    inboundPending: turn.communicationEvidence?.inbound.filter((message) => message.status === 'enqueued').length ?? 0,
   });
   return { score, grades, desync };
 }
@@ -211,5 +236,15 @@ export function recordEvalResult(r: EvalResult): void {
   }, (span) => {
     if (!r.pass) span.setStatus({ code: 2, message: 'eval_failed' });
   });
-  log[r.pass ? 'info' : 'warn'](`eval ${r.name} ${result}`, { 'eval.name': r.name, 'eval.source': r.source, 'eval.result': result, 'eval.detail': r.detail, ...r.attrs });
+  const logAttrs = { 'eval.name': r.name, 'eval.source': r.source, 'eval.result': result, 'eval.detail': r.detail, ...r.attrs };
+  log[r.pass ? 'info' : 'error'](`eval ${r.name} ${result}`, logAttrs);
+  if (!r.pass) {
+    Sentry.withScope((scope) => {
+      scope.setLevel('error');
+      scope.setFingerprint(['agent-eval', r.source, r.name]);
+      scope.setTags({ 'eval.name': r.name, 'eval.source': r.source });
+      scope.setContext('eval', { result, detail: r.detail ?? null, ...r.attrs });
+      Sentry.captureMessage(`Eval failed: ${r.name} (${r.source})`);
+    });
+  }
 }

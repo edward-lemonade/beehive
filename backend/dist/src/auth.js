@@ -1,6 +1,7 @@
-import { verifyToken } from '@clerk/backend';
+import { createClerkClient, verifyToken } from '@clerk/backend';
 import { config } from './config.js';
-import { ensureUserForClerkId } from './db/index.js';
+import { ensureUserForClerkId, syncHandle } from './db/index.js';
+import { Sentry } from './observability/telemetry.js';
 function parseBearer(tokenHeader) {
     if (!tokenHeader)
         return null;
@@ -10,6 +11,23 @@ function parseBearer(tokenHeader) {
 function stableHandle(clerkId) {
     const suffix = clerkId.slice(-4) || '0000';
     return `Otter-${suffix}`;
+}
+const clerk = createClerkClient({ secretKey: config.CLERK_SECRET_KEY });
+const profileCache = new Map();
+export async function clerkProfile(clerkId) {
+    const cached = profileCache.get(clerkId);
+    if (cached)
+        return cached;
+    try {
+        const u = await clerk.users.getUser(clerkId);
+        const name = [u.firstName, u.lastName].filter(Boolean).join(' ');
+        const profile = { handle: u.username || name || null, imageUrl: u.imageUrl || null };
+        profileCache.set(clerkId, profile);
+        return profile;
+    }
+    catch {
+        return { handle: null, imageUrl: null };
+    }
 }
 export const requireAuth = (() => {
     const handler = async (c, next) => {
@@ -38,12 +56,21 @@ export const requireAuth = (() => {
         if (!user) {
             return c.json({ ok: false, error: 'Authentication failed' }, 401);
         }
+        const profile = await clerkProfile(clerkId);
+        if (profile.handle && profile.handle !== user.handle) {
+            user.handle = profile.handle;
+            await syncHandle(user.id, profile.handle);
+        }
         c.set('user', {
             id: user.id,
             clerkId: user.clerk_id,
             handle: user.handle,
             tier: user.tier,
+            imageUrl: profile.imageUrl,
         });
+        // Public handle and internal id only; never the Clerk email or phone.
+        Sentry.setUser({ id: user.id, username: user.handle });
+        Sentry.setTag('user.tier', user.tier);
         await next();
     };
     return handler;

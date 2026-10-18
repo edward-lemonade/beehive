@@ -21,6 +21,7 @@ export interface ArrangementRepository {
   listActive(): Promise<StoredArrangement[]>;
   activeForIntent(intentId: string): Promise<StoredArrangement[]>;
   listForUser(userId: string): Promise<StoredArrangement[]>;
+  removeForUsers(userIds: string[]): Promise<string[]>;
   countRequested(userId: string): Promise<number>;
   addDecline(userId: string, key: string, at: number): Promise<void>;
   isDeclined(userId: string, key: string): Promise<boolean>;
@@ -183,6 +184,20 @@ export class PostgresArrangementRepository implements ArrangementRepository {
     return this.load(rows.map((r) => r.id));
   }
 
+  async removeForUsers(userIds: string[]): Promise<string[]> {
+    if (userIds.length === 0) return [];
+    return sql.begin(async (tx) => {
+      const removed = await tx<{ id: string }[]>`
+        DELETE FROM arrangements
+        WHERE id IN (
+          SELECT DISTINCT arrangement_id FROM arrangement_slots WHERE user_id = ANY(${userIds}::uuid[])
+        )
+        RETURNING id`;
+      await tx`DELETE FROM declined WHERE user_id = ANY(${userIds}::uuid[])`;
+      return removed.map((row) => row.id);
+    });
+  }
+
   async countRequested(userId: string): Promise<number> {
     const [row] = await sql<{ n: string }[]>`
       SELECT count(*) AS n FROM arrangement_slots s JOIN arrangements a ON a.id = s.arrangement_id
@@ -305,6 +320,21 @@ export class MemoryArrangementRepository implements ArrangementRepository {
     return [...this.rows.values()]
       .filter((r) => (r.state === 'proposed' || r.state === 'committed') && r.slots.some((s) => s.userId === userId))
       .map(clone);
+  }
+
+  async removeForUsers(userIds: string[]): Promise<string[]> {
+    const users = new Set(userIds);
+    const removed: string[] = [];
+    for (const [id, row] of this.rows) {
+      if (row.slots.some((slot) => users.has(slot.userId))) {
+        this.rows.delete(id);
+        removed.push(id);
+      }
+    }
+    for (const decline of [...this.declines]) {
+      if (users.has(decline.slice(0, decline.indexOf('|')))) this.declines.delete(decline);
+    }
+    return removed;
   }
 
   async countRequested(userId: string): Promise<number> {

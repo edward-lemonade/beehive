@@ -1,5 +1,8 @@
 import { sql } from '../db/index.js';
+import { clearForUsers } from '../arrangements/service.js';
+import { clearChatsForUsers } from '../agent/messages.js';
 import { confirmDraft, createDraft, deleteIntent, listMine } from '../intents/service.js';
+import { events } from '../events.js';
 
 /** Three people who only make a deal together: edward swaps his Saturday and Sunday tickets for dawg's 3-day ticket by selling them to kat. */
 export const SEED_USERS = [
@@ -53,6 +56,10 @@ export async function loadSeed(scenarioId = 'ticket-swap'): Promise<{ handles: s
   const scenario = scenarioFor(scenarioId);
   const owners: Owner[] = [];
   for (const seed of scenario.users) owners.push(await findOwner(seed.handle));
+  const ownerIds = owners.map((owner) => owner.id);
+  await clearForUsers(ownerIds);
+  await clearChatsForUsers(ownerIds);
+  for (const userId of ownerIds) events.emit('chat.cleared', { userId });
   for (const owner of owners) {
     for (const intent of await listMine(owner.id)) await deleteIntent(intent.id, owner.id);
   }

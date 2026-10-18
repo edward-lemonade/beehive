@@ -15,7 +15,7 @@ import { Sentry, type Attrs } from './telemetry.js';
 type Channel = 'user_agent' | 'agent_agent' | 'tool' | 'deal';
 
 const enabled = (): boolean => config.SENTRY_CONVERSATION_LOG && Boolean(Sentry.getClient());
-const money = (cents: number | null | undefined): string => (typeof cents === 'number' ? `$${(cents / 100).toFixed(2).replace(/\.00$/, '')}` : 'no price');
+const money = (cents: unknown): string => (typeof cents === 'number' ? `$${(cents / 100).toFixed(2).replace(/\.00$/, '')}` : 'unknown');
 const clip = (s: string, n = 600): string => (s.length > n ? `${s.slice(0, n)}…` : s);
 const short = (id: string): string => id.slice(0, 8);
 
@@ -159,6 +159,7 @@ export function logDeal(stage: DealStage, arrangementId: string, extra: { intent
     const parts: string[] = [];
     const handles: string[] = [];
     let totalCents = 0;
+    let hasUnpricedLink = false;
     if (arr) {
       for (const slot of arr.slots) handles.push(await handleOfIntent(slot.intentId));
       for (const link of arr.links) {
@@ -168,8 +169,13 @@ export function logDeal(stage: DealStage, arrangementId: string, extra: { intent
         if (link.payer) {
           const payer = link.payer === link.a ? a : b;
           const payee = link.payer === link.a ? b : a;
-          cash = `${payer} pays ${payee} ${money(link.amountCents)}`;
-          totalCents += link.amountCents ?? 0;
+          if (link.amountCents === null) {
+            hasUnpricedLink = true;
+            cash = `price not set; seller ${payee} must name the asking price; buyer ${payer} is waiting`;
+          } else {
+            cash = `${payer} pays ${payee} ${money(link.amountCents)}`;
+            totalCents += link.amountCents;
+          }
         }
         parts.push([...flows, cash].filter(Boolean).join(', '));
       }
@@ -181,7 +187,7 @@ export function logDeal(stage: DealStage, arrangementId: string, extra: { intent
       'conv.stage': stage,
       'conv.participants': handles.join(', '),
       'conv.terms': clip(parts.join(' | '), 1000),
-      'conv.total_usd': totalCents / 100,
+      'conv.total_usd': hasUnpricedLink ? undefined : totalCents / 100,
       'conv.reason': extra.reason,
       'conv.by': extra.intentId ? await handleOfIntent(extra.intentId) : undefined,
       'arrangement.id': arrangementId,

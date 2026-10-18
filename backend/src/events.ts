@@ -24,6 +24,7 @@ export type EventMap = {
   };
   /** An agent reached a price its user never authorised and needs the user's decision. */
   'negotiation.awaiting_user': { arrangementId?: string; linkId: string; intentId: string; counterpartIntentId: string; amountCents: number; side?: 'payer' | 'receiver' };
+  'chat.cleared': { userId: string };
   notify: { userId: string; kind: string; payload?: Record<string, unknown> };
 };
 

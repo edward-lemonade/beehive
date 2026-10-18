@@ -7,9 +7,10 @@ import { termsView } from '../src/arrangements/terms.js';
 import { MemoryNoticeRepository } from '../src/discovery/notices.js';
 import { refreshEdges, resetNearMissDeliveries, setNoticeRepository } from '../src/discovery/service.js';
 import { events } from '../src/events.js';
-import { setIntentRepository } from '../src/intents/service.js';
+import { setIntentParser, setIntentRepository } from '../src/intents/service.js';
+import { parseIntentText } from '../src/intents/parse.js';
 import app from '../src/index.js';
-import { MemoryNegotiationLogRepository, setNegotiationLogRepository } from '../src/negotiation/log.js';
+import { MemoryNegotiationLogRepository, negotiationLog, setNegotiationLogRepository } from '../src/negotiation/log.js';
 import { installNegotiation, resetSessions } from '../src/negotiation/session.js';
 import { setWordingProvider, templateWording } from '../src/negotiation/wording.js';
 import { bus } from '../src/runtime/bus.js';
@@ -17,6 +18,8 @@ import { buildGuardContext } from '../src/runtime/guard-context.js';
 import { resetHooks } from '../src/runtime/hooks.js';
 import { ensureAgent, scheduler, startRuntime, stopRuntime } from '../src/runtime/registry.js';
 import { MemorySignalRepository, setSignalRepository } from '../src/runtime/signals.js';
+import { SEED_SCENARIOS, SEED_USERS, postScenario, seedOptions } from '../src/seed/scenario.js';
+import { runAgentChat, setChatCompleter } from '../src/agent/chat.js';
 const ticket = (label) => ({ kind: 'ticket', label, attrs: {}, qty: 1 });
 const cash = (amountCents) => ({ kind: 'cash', label: 'cash', attrs: {}, qty: 1, amountCents });
 class MemoryRepo {
@@ -27,6 +30,8 @@ class MemoryRepo {
     async changeState() { return undefined; }
     async expireDue() { return []; }
     async listMine(ownerId) { return [...this.intents.values()].filter((i) => i.ownerId === ownerId); }
+    async remove(id, ownerId, state) { const i = this.intents.get(id); if (!i || i.ownerId !== ownerId || i.state !== state)
+        return false; return this.intents.delete(id); }
     async listOpen() { return [...this.intents.values()].filter((i) => i.state === 'open'); }
 }
 let repo;
@@ -102,10 +107,216 @@ afterEach(() => {
     setArrangementRepository();
     setContactLookup();
     setIntentRepository();
+    setIntentParser();
+    setChatCompleter();
     setSignalRepository();
     setNoticeRepository();
 });
 describe('end to end', () => {
+    it('does not turn an agent-originated opening into consent from its user', async () => {
+        const money = { kind: 'cash', label: 'cash', attrs: {}, qty: 1 };
+        add('buyer', [money], [[ticket('concert')]], null);
+        add('seller', [ticket('concert')], [[cash(11000)]], null);
+        add('firm', [ticket('concert')], [[{ ...cash(10000), flex: 'firm' }]], 10000);
+        await start('buyer', 'seller', 'firm');
+        await waitFor(() => byState('proposed').length === 2);
+        const arr = byState('proposed').find((entry) => entry.slots.some((slot) => slot.intentId === 'seller'));
+        expect(arr.proposal).toMatchObject({ fromIntentId: 'buyer', amountCents: 9000, source: 'agent' });
+        await service.approve('useller', arr.id);
+        const accepted = arrs.rows.get(arr.id);
+        expect(accepted.state).toBe('proposed');
+        expect(accepted.proposal).toBeNull();
+        expect(accepted.slots.find((slot) => slot.intentId === 'seller').approval).toBe('approved');
+        expect(accepted.slots.find((slot) => slot.intentId === 'buyer').approval).toBe('requested');
+        await service.approve('ubuyer', arr.id);
+        expect(arrs.rows.get(arr.id).state).toBe('committed');
+    });
+    it('loads the shopping seed and proposes $90 with dawg while preserving the $100 firm option', async () => {
+        expect(seedOptions().map((scenario) => scenario.id)).toEqual(['ticket-swap', 'ticket-shopping']);
+        expect(SEED_SCENARIOS[0].users).toBe(SEED_USERS);
+        const scenario = SEED_SCENARIOS[1];
+        setIntentParser(async (text) => parseIntentText(text));
+        await postScenario(scenario.users.map((user) => ({ id: `u-${user.handle}`, handle: user.handle, tier: 'new' })), scenario.id);
+        const intents = [...repo.intents.values()];
+        const buyer = intents.find((intent) => intent.public.ownerHandle === 'edward');
+        const firm = intents.find((intent) => intent.public.ownerHandle === 'kat');
+        const negotiable = intents.find((intent) => intent.public.ownerHandle === 'dawg');
+        expect(buyer.private.minNetCents).toBeNull();
+        expect(firm.private.minNetCents).toBe(10000);
+        expect(negotiable.private.minNetCents).toBeNull();
+        await start(...intents.map((intent) => intent.id));
+        await waitFor(() => byState('proposed').length === 2);
+        await coordinator.idle();
+        const offers = await negotiationLog().forIntents([buyer.id], 100);
+        expect(offers.find((entry) => entry.kind === 'offer' && entry.to === negotiable.id)).toMatchObject({
+            from: buyer.id, amountCents: 9000,
+        });
+        const mine = await service.listMine(buyer.ownerId);
+        expect(mine.flatMap((entry) => entry.terms.cashOut)).toEqual(expect.arrayContaining([
+            { toHandle: 'kat', amountCents: 10000 },
+            { toHandle: 'dawg', amountCents: 9000 },
+        ]));
+        expect(byState('committed')).toHaveLength(0);
+        const shoppingDeal = mine.find((entry) => entry.terms.cashOut.some((cash) => cash.toHandle === 'dawg'));
+        let marketCalls = 0;
+        setChatCompleter(async (messages) => {
+            marketCalls++;
+            const context = messages[0].content;
+            expect(context).toContain(`ownIntentId=${buyer.id}`);
+            expect(context.match(new RegExp(`ownIntentId=${buyer.id}`, 'g'))).toHaveLength(2);
+            expect(context).toContain('pay $100 to kat');
+            expect(context).toContain('pay $90 to dawg');
+            expect(context).toContain("The user's agent offered $90 to dawg");
+            expect(context).toContain('waiting for their answer');
+            const event = messages[messages.length - 1].content;
+            expect(event).toContain('Review the market as a whole');
+            expect(event).toContain(shoppingDeal.terms.arrangementId);
+            expect(event).not.toContain('11000');
+            expect(event).not.toContain('unowned-arrangement');
+            return JSON.stringify({ reply: 'model-output-market-review', action: null });
+        });
+        const review = await runAgentChat({
+            user: { id: buyer.ownerId, handle: 'edward', tier: 'new' },
+            event: {
+                kind: 'market_update',
+                arrangementIds: [...mine.map((entry) => entry.terms.arrangementId), 'unowned-arrangement'],
+                amountCents: 11000,
+            },
+            history: [],
+        });
+        expect(marketCalls).toBe(1);
+        expect(review.reply).toBe('model-output-market-review');
+        expect(review.changed).toBe(false);
+        expect(shoppingDeal.terms.proposal).toMatchObject({
+            amountCents: 9000, otherHandle: 'dawg', awaiting: 'counterparty', source: 'agent',
+        });
+        const openingForSeller = (await service.listMine(negotiable.ownerId)).find((entry) => entry.terms.arrangementId === shoppingDeal.terms.arrangementId);
+        expect(openingForSeller.terms.proposal).toMatchObject({
+            amountCents: 9000, otherHandle: 'edward', awaiting: 'user', source: 'agent',
+        });
+        await expect(service.approve(buyer.ownerId, shoppingDeal.terms.arrangementId)).rejects.toThrow(/waiting for the other user/);
+        let openingCalls = 0;
+        setChatCompleter(async (messages) => {
+            openingCalls++;
+            expect(messages[0].content).toContain("edward's agent offered $90");
+            expect(messages[0].content).toContain('waiting on the USER');
+            return JSON.stringify({ reply: 'model-output-opening', action: null });
+        });
+        const openingNotice = await runAgentChat({
+            user: { id: negotiable.ownerId, handle: 'dawg', tier: 'new' },
+            event: { kind: 'approval_request', arrangementId: shoppingDeal.terms.arrangementId }, history: [],
+        });
+        expect(openingCalls).toBe(1);
+        expect(openingNotice.reply).toBe('model-output-opening');
+        const updates = [];
+        const onUpdate = ({ arrangementId }) => {
+            if (arrangementId === shoppingDeal.terms.arrangementId) {
+                updates.push(arrs.rows.get(arrangementId).proposal.amountCents);
+            }
+        };
+        events.on('arrangement.updated', onUpdate);
+        try {
+            let step = 0;
+            setChatCompleter(async (messages) => {
+                if (step++ === 0)
+                    return JSON.stringify({
+                        reply: '', action: { type: 'negotiate_arrangement', arrangementId: shoppingDeal.terms.arrangementId, targetCents: 10000 },
+                    });
+                expect(messages[0].content).toContain('receive $100 from edward');
+                expect(messages[0].content).not.toContain('receive $90 from edward');
+                expect(messages[0].content).toContain('waiting for their answer');
+                return JSON.stringify({ reply: 'model-output-counter', action: null });
+            });
+            const counter = await runAgentChat({
+                user: { id: negotiable.ownerId, handle: 'dawg', tier: 'new' },
+                message: "No. I'll do $100 max", history: [],
+            });
+            expect(counter.changed).toBe(true);
+            expect(updates).toEqual([10000]);
+        }
+        finally {
+            events.off('arrangement.updated', onUpdate);
+        }
+        const buyerTerms = (await service.listMine(buyer.ownerId)).find((entry) => entry.terms.arrangementId === shoppingDeal.terms.arrangementId).terms;
+        const sellerTerms = (await service.listMine(negotiable.ownerId)).find((entry) => entry.terms.arrangementId === shoppingDeal.terms.arrangementId).terms;
+        expect(buyerTerms).toMatchObject({
+            cashOut: [{ toHandle: 'dawg', amountCents: 10000 }],
+            netCents: -10000,
+            approval: 'requested',
+            proposal: { amountCents: 10000, otherHandle: 'dawg', awaiting: 'user' },
+        });
+        expect(sellerTerms).toMatchObject({
+            cashIn: [{ fromHandle: 'edward', amountCents: 10000 }],
+            proposal: { amountCents: 10000, otherHandle: 'edward', awaiting: 'counterparty' },
+        });
+        expect(buyerTerms.revision).toBeGreaterThan(shoppingDeal.terms.revision);
+        // Check the model's factual inputs and that its output is used, not an injected scenario response.
+        let noticeCalls = 0;
+        setChatCompleter(async (messages) => {
+            noticeCalls++;
+            expect(messages[0].content).toContain(noticeCalls === 1 ? 'dawg proposed $100' : 'You proposed $100 to edward');
+            expect(messages[0].content).not.toContain('receive $90 from edward');
+            expect(messages[0].content).not.toContain('pay $90 to dawg');
+            expect(messages[messages.length - 1].content).not.toContain('9000');
+            return JSON.stringify({ reply: `model-output-notice-${noticeCalls}`, action: null });
+        });
+        const event = { kind: 'approval_request', arrangementId: shoppingDeal.terms.arrangementId, amountCents: 9000 };
+        const buyerNotice = await runAgentChat({
+            user: { id: buyer.ownerId, handle: 'edward', tier: 'new' }, event,
+            history: [{ from: 'agent', text: "Dawg's price is $90. Should we go with that?" }],
+        });
+        expect(buyerNotice.reply).toBe('model-output-notice-1');
+        const sellerNotice = await runAgentChat({
+            user: { id: negotiable.ownerId, handle: 'dawg', tier: 'new' }, event, history: [],
+        });
+        expect(sellerNotice.reply).toBe('model-output-notice-2');
+        expect(noticeCalls).toBe(2);
+        await expect(service.approve(negotiable.ownerId, shoppingDeal.terms.arrangementId)).rejects.toThrow(/waiting for the other user/);
+        await expect(service.approve(buyer.ownerId, shoppingDeal.terms.arrangementId, {
+            expectedRevision: shoppingDeal.terms.revision,
+        })).rejects.toThrow(/proposal changed/);
+        await service.approve(buyer.ownerId, shoppingDeal.terms.arrangementId);
+        const final = (await service.listMine(buyer.ownerId)).find((entry) => entry.terms.arrangementId === shoppingDeal.terms.arrangementId).terms;
+        expect(final.state).toBe('committed');
+        expect(final.cashOut).toEqual([{ toHandle: 'dawg', amountCents: 10000 }]);
+        expect(final.proposal).toBeUndefined();
+    });
+    it('clears every historical arrangement involving seed users while preserving unrelated users', async () => {
+        const arrangement = (id, state, userId) => ({
+            id,
+            key: `${id}@1`,
+            state,
+            revision: 1,
+            reason: null,
+            excluded: [],
+            declaredNet: {},
+            replaceDeadline: null,
+            createdAt: 0,
+            updatedAt: 0,
+            slots: [{
+                    intentId: `intent-${id}`,
+                    userId,
+                    intentVersion: 1,
+                    approval: state === 'committed' ? 'fulfilled' : 'requested',
+                    termsHash: null,
+                    approvedNetCents: null,
+                    requestedAt: null,
+                    decidedAt: null,
+                }],
+            links: [],
+        });
+        await arrs.save(arrangement('seed-active', 'proposed', 'u-seed'));
+        await arrs.save(arrangement('seed-history', 'committed', 'u-seed'));
+        await arrs.save(arrangement('other-user', 'committed', 'u-other'));
+        arrs.declines.add('u-seed|old-seed-key');
+        arrs.declines.add('u-other|other-key');
+        await service.clearForUsers(['u-seed']);
+        expect(arrs.rows.has('seed-active')).toBe(false);
+        expect(arrs.rows.has('seed-history')).toBe(false);
+        expect(arrs.rows.has('other-user')).toBe(true);
+        expect(arrs.declines.has('u-seed|old-seed-key')).toBe(false);
+        expect(arrs.declines.has('u-other|other-key')).toBe(true);
+    });
     it('S1: proposes once, commits once, and releases contacts per counterparty pair only', async () => {
         chain();
         await start('alice', 'bob', 'carol');
@@ -129,7 +340,7 @@ describe('end to end', () => {
         await coordinator.idle();
         expect(rows()).toHaveLength(1);
     });
-    it('S1 checklist lists receives before gives and can be marked done', async () => {
+    it('S1 committed deals expose counterparties to contact', async () => {
         chain();
         await start('alice', 'bob', 'carol');
         await waitFor(() => byState('proposed').length === 1);
@@ -137,12 +348,54 @@ describe('end to end', () => {
         for (const u of ['ualice', 'ubob', 'ucarol'])
             await service.approve(u, id);
         const mine = await service.listMine('ubob');
-        const steps = mine[0].checklist;
-        const incoming = steps.map((s) => s.kind === 'get' || s.kind === 'cash_in');
-        expect(incoming).toEqual([...incoming].sort((x, y) => Number(y) - Number(x)));
-        expect(steps.some((s) => s.kind === 'give')).toBe(true);
-        const updated = await service.markStep('ubob', id, steps[0].id, true);
-        expect(updated[0].done).toBe(true);
+        expect(mine[0].contacts.length).toBeGreaterThan(0);
+    });
+    it('approves by itself for a user with a standing limit the deal meets, without asking', async () => {
+        chain();
+        repo.intents.get('carol').private.autoApprove = true;
+        await start('alice', 'bob', 'carol');
+        await waitFor(() => rows().some((r) => r.slots.some((sl) => sl.intentId === 'carol' && sl.approval === 'approved')));
+        expect(kinds('ucarol', 'approval_request')).toHaveLength(0);
+        expect(kinds('ubob', 'approval_request').length).toBeGreaterThan(0);
+    });
+    it('leaves a link nobody priced unpriced, tells the seller to name it, and blocks approval', async () => {
+        const plainCash = { kind: 'cash', label: 'cash', attrs: {}, qty: 1 };
+        add('edward', [ticket('sat'), ticket('sun')], [[ticket('three')]], null);
+        add('kat', [plainCash], [[ticket('sat')], [ticket('sun')]], null);
+        add('dawg', [ticket('three')], [[plainCash]], null);
+        await start('edward', 'kat', 'dawg');
+        await waitFor(() => byState('proposed').length === 1);
+        const arr = byState('proposed')[0];
+        expect(arr.links.filter((l) => l.payer).every((l) => l.amountCents === null)).toBe(true);
+        const view = (await service.listMine('udawg')).find((a) => a.terms.arrangementId === arr.id).terms;
+        expect(view.unpriced).toEqual([{ otherHandle: 'h-edward', role: 'seller', items: ['three'] }]);
+        expect(view.cashIn).toHaveLength(0);
+        await expect(service.approve('udawg', arr.id)).rejects.toThrow(/price has not been set/);
+    });
+    it('lets a user approve their own priced link while a link between two others is still unpriced, but never commits unpriced', async () => {
+        const plainCash = { kind: 'cash', label: 'cash', attrs: {}, qty: 1 };
+        add('edward', [ticket('sat'), ticket('sun')], [[ticket('three')]], -20000);
+        add('kat', [plainCash], [[ticket('sat')], [ticket('sun')]], null);
+        add('dawg', [ticket('three')], [[cash(20000)]], 20000);
+        await start('edward', 'kat', 'dawg');
+        await waitFor(() => byState('proposed').length === 1);
+        const arr = byState('proposed')[0];
+        const dawgLink = arr.links.find((l) => l.a === 'dawg' || l.b === 'dawg');
+        expect(dawgLink.amountCents).toBe(20000);
+        expect(arr.links.some((l) => l.payer && l.amountCents === null)).toBe(true);
+        await service.approve('udawg', arr.id);
+        expect(byState('proposed')[0].slots.find((s) => s.intentId === 'dawg').approval).toBe('approved');
+        await expect(service.approve('uedward', arr.id)).rejects.toThrow(/price has not been set/);
+        await expect(service.approve('ukat', arr.id)).rejects.toThrow(/price has not been set/);
+        expect(byState('committed')).toHaveLength(0);
+    });
+    it('refuses approval from a user with no public contact', async () => {
+        chain();
+        await start('alice', 'bob', 'carol');
+        await waitFor(() => byState('proposed').length === 1);
+        const id = byState('proposed')[0].id;
+        setContactLookup(async (ids) => new Map(ids.map((i) => [i, null])));
+        await expect(service.approve('ubob', id)).rejects.toThrow(/public contact/);
     });
     it('S2: a decline is replaced by a new participant at the old amounts; only they are asked', async () => {
         chain();
@@ -288,6 +541,43 @@ describe('approvals', () => {
         expect(next.slots.find((s) => s.intentId === 'carol').approval).toBe('approved');
         const bad = await service.negotiateFurther('ualice', arr.id, { targetCents: 999999, linkId: 'alice|bob' });
         expect(bad).toMatchObject({ status: 'failed' });
+    });
+    it('lets a seller who already approved name a lower price than their listed ask', async () => {
+        chain();
+        await start('alice', 'bob', 'carol');
+        await waitFor(() => byState('proposed').length === 1);
+        const arr = byState('proposed')[0];
+        await service.approve('ucarol', arr.id);
+        const result = await service.negotiateFurther('ucarol', arr.id, { targetCents: 4800, linkId: 'bob|carol' });
+        expect(result.status).not.toBe('failed');
+    });
+    it('a standing proposal is settled by the other user saying yes, leaving nobody waiting', async () => {
+        chain();
+        await start('alice', 'bob', 'carol');
+        await waitFor(() => byState('proposed').length === 1);
+        const arr = byState('proposed')[0];
+        for (const l of arrs.rows.get(arr.id).links)
+            if (l.id === 'alice|bob')
+                l.amountCents = 6000;
+        arrs.rows.get(arr.id).proposal = { linkId: 'bob|carol', amountCents: 5200, fromIntentId: 'carol' };
+        await service.approve('ubob', arr.id);
+        const next = arrs.rows.get(arr.id);
+        expect(next.proposal).toBeNull();
+        expect(next.links.find((l) => l.id === 'bob|carol').amountCents).toBe(5200);
+        expect(next.slots.find((s) => s.intentId === 'carol').approval).toBe('approved');
+        expect(next.slots.find((s) => s.intentId === 'bob').approval).toBe('approved');
+    });
+    it('saying no to a proposal drops only that price', async () => {
+        chain();
+        await start('alice', 'bob', 'carol');
+        await waitFor(() => byState('proposed').length === 1);
+        const arr = byState('proposed')[0];
+        arrs.rows.get(arr.id).proposal = { linkId: 'bob|carol', amountCents: 5200, fromIntentId: 'carol' };
+        await service.decline('ubob', arr.id);
+        const next = arrs.rows.get(arr.id);
+        expect(next.proposal).toBeNull();
+        expect(next.state).toBe('proposed');
+        expect(next.slots.find((s) => s.intentId === 'bob').approval).not.toBe('declined');
     });
     it('hides arrangements from non-participants with a 404', async () => {
         chain();

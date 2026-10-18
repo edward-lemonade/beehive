@@ -1,8 +1,11 @@
+import { continueFrom, traceHeaders } from '../observability/telemetry.js';
 const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
 export class Scheduler {
     run;
     coalesceMs = 250;
     pending = new Map();
+    // The first caller's trace, so a coalesced wake still shows up in the trace that caused it.
+    origins = new Map();
     timer;
     running = new Map();
     inflight = new Set();
@@ -14,6 +17,8 @@ export class Scheduler {
         const reasons = this.pending.get(intentId) ?? new Set();
         reasons.add(reason);
         this.pending.set(intentId, reasons);
+        if (!this.origins.has(intentId))
+            this.origins.set(intentId, traceHeaders());
         if (this.timer)
             return;
         this.timer = setTimeout(() => {
@@ -23,17 +28,19 @@ export class Scheduler {
     }
     async flush() {
         const batch = [...this.pending];
+        const origins = new Map(this.origins);
         this.pending.clear();
+        this.origins.clear();
         for (const [intentId, reasons] of batch) {
-            this.launch(intentId, reasons);
+            this.launch(intentId, reasons, origins.get(intentId));
             await yieldToEventLoop();
         }
     }
     // Wakes for the same intent never overlap; different intents run concurrently.
-    launch(intentId, reasons) {
+    launch(intentId, reasons, origin) {
         const previous = this.running.get(intentId) ?? Promise.resolve();
         const next = previous
-            .then(() => this.run(intentId, reasons))
+            .then(() => continueFrom(origin, () => this.run(intentId, reasons)))
             .catch((error) => console.error('agent wake failed', intentId, error))
             .finally(() => {
             if (this.running.get(intentId) === next)
@@ -58,5 +65,6 @@ export class Scheduler {
             clearTimeout(this.timer);
         this.timer = undefined;
         this.pending.clear();
+        this.origins.clear();
     }
 }

@@ -17,6 +17,8 @@ class MemoryRepo {
     async changeState() { return undefined; }
     async expireDue() { return []; }
     async listMine(ownerId) { return [...this.intents.values()].filter((i) => i.ownerId === ownerId); }
+    async remove(id, ownerId, state) { const i = this.intents.get(id); if (!i || i.ownerId !== ownerId || i.state !== state)
+        return false; return this.intents.delete(id); }
     async listOpen() { return [...this.intents.values()].filter((i) => i.state === 'open'); }
 }
 let repo;

@@ -1,4 +1,5 @@
-import { canon, normText, slotsOf } from './slots.js';
+import { canon, slotsOf } from './slots.js';
+import { labelsMatch } from '../discovery/match.js';
 import { BudgetMeter } from './types.js';
 export function arrangementKey(slots) {
     return slots.map((s) => `${s.intentId}@${s.intentVersion}`).sort().join('|');
@@ -30,7 +31,7 @@ function got(state, wanter, slot) {
     return state.allocs.filter((a) => a.wanter === wanter && a.slot === slot).reduce((s, a) => s + a.qty, 0);
 }
 function optionQty(options, given) {
-    const match = options.find((o) => o.kind === given.kind && normText(o.label) === normText(given.label));
+    const match = options.find((o) => o.kind === given.kind && labelsMatch(o.label, given.label));
     return (match ?? options[0]).qty;
 }
 // Payer rules: cash only ever flows between two intents that exchange a non-cash item.

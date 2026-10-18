@@ -17,6 +17,7 @@ export function installSseBridge(): void {
   events.on('intent.updated', ({ intentId, privateOnly }) => {
     if (!privateOnly) sseHub.publishPublic({ type: 'intent.updated', payload: { intentId } });
   });
+  events.on('chat.cleared', ({ userId }) => sseHub.publishToUser(userId, { type: 'chat.cleared', payload: {} }));
 
   events.on('notify', ({ userId, kind, payload }) => {
     void (async () => {

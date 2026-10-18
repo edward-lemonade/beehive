@@ -31,6 +31,33 @@ beforeEach(() => {
 });
 
 describe('agent chat', () => {
+  it('treats a user correction as provisional evidence and reconsiders a stale mismatch', async () => {
+    let prompt = '';
+    setChatCompleter(async (messages) => {
+      prompt = messages.map((message) => message.content).join('\n');
+      return JSON.stringify({
+        reply: "You're right: if Dawg's 3-day ticket includes Saturday and Sunday, it covers the days you want. Your $200 is still an offer, not an accepted price.",
+        action: null,
+      });
+    });
+
+    const out = await runAgentChat({
+      user,
+      message: "Dawg's 3-day ticket includes Saturday and Sunday, so it does match.",
+      history: [
+        { from: 'me', text: "I want Dawg's 3-day ticket for $200." },
+        { from: 'agent', text: "Dawg's listing doesn't match the days you want." },
+        { from: 'me', text: "It includes Saturday and Sunday." },
+        { from: 'agent', text: "It still doesn't match." },
+      ],
+    });
+
+    expect(prompt).toContain('Treat their direct clarification as provisional evidence');
+    expect(prompt).toContain("Dawg's 3-day ticket includes Saturday and Sunday");
+    expect(out.reply).toContain("You're right");
+    expect(out.reply).toContain('$200');
+  });
+
   it('sees the listings, acts on them, then answers using the tool result', async () => {
     const prompts: string[] = [];
     const script = [

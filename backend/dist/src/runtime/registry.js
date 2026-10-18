@@ -1,6 +1,7 @@
 import { refreshEdges } from '../discovery/service.js';
 import { events } from '../events.js';
 import { getIntentRepository } from '../intents/service.js';
+import { Sentry, metric } from '../observability/telemetry.js';
 import { Agent } from './agent.js';
 import { bus } from './bus.js';
 import { buildGuardContext } from './guard-context.js';
@@ -9,14 +10,23 @@ import { Scheduler } from './scheduler.js';
 const agents = new Map();
 const REFRESH_FIRST = ['opened', 'updated', 'boot', 'keep'];
 export const scheduler = new Scheduler(async (intentId, reasons) => {
-    const entry = agents.get(intentId) ?? createEntry(intentId);
-    // Edges may not be computed yet for a new, edited or rehydrated intent.
-    if (REFRESH_FIRST.some((reason) => reasons.has(reason)))
-        await refreshEdges(intentId);
     const primary = REFRESH_FIRST.find((reason) => reasons.has(reason)) ?? [...reasons][0] ?? 'edges';
-    const { closed } = await entry.agent.wake(primary);
-    if (closed)
-        destroyAgent(intentId);
+    await Sentry.startSpan({
+        op: 'agent.wake',
+        name: `wake trade-agent (${primary})`,
+        attributes: { 'agent.intent_id': intentId, 'agent.wake_reason': primary, 'agent.wake_reasons': [...reasons].join(','), 'agent.coalesced': reasons.size },
+    }, async (span) => {
+        const started = performance.now();
+        const entry = agents.get(intentId) ?? createEntry(intentId);
+        // Edges may not be computed yet for a new, edited or rehydrated intent.
+        if (REFRESH_FIRST.some((reason) => reasons.has(reason)))
+            await refreshEdges(intentId);
+        const { closed } = await entry.agent.wake(primary);
+        span.setAttributes({ 'agent.closed': closed, 'agent.dormant': entry.agent.dormant });
+        metric.dist('agent.wake.duration', performance.now() - started, 'millisecond', { reason: primary });
+        if (closed)
+            destroyAgent(intentId);
+    });
 });
 function createEntry(intentId) {
     const agent = new Agent(intentId, (reason) => scheduler.wake(intentId, reason));

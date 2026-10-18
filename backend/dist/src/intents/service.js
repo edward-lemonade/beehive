@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { clock } from '../clock.js';
 import { draftSchema, intentPublicSchema } from '../contracts/index.js';
 import { events } from '../events.js';
+import { reportInjection } from '../observability/security.js';
 import { parseIntent as parseIntentWithLLM } from './parse.js';
 import { intentRepository, OpenIntentLimitError, } from './repository.js';
 const DRAFT_LIFETIME_MS = 48 * 60 * 60 * 1000;
@@ -26,61 +27,18 @@ export function getIntentRepository() {
 export function setIntentParser(parser) {
     activeParser = parser ?? parseIntentWithLLM;
 }
-function hasAttr(item, key) {
-    const value = item.attrs[key];
-    return typeof value === 'string' ? value.trim().length > 0 : typeof value === 'number' && Number.isFinite(value);
-}
+// Intents stay free text. Only ask when we cannot tell what is offered or wanted.
 function missingFields(parsed) {
     const missing = [];
     if (parsed.give.length === 0 && parsed.want.length === 0)
         missing.push('item');
-    if (![...parsed.give, ...parsed.want.flatMap((want) => want.anyOf)].some((item) => item.kind !== 'cash')) {
+    else if (![...parsed.give, ...parsed.want.flatMap((want) => want.anyOf)].some((item) => item.kind !== 'cash')) {
         missing.push('nonCashItem');
     }
-    if ([...parsed.give, ...parsed.want.flatMap((want) => want.anyOf)]
-        .some((item) => item.qty > 1 && parsed.separateOrTogether === null)) {
-        missing.push('separateOrTogether');
-    }
-    for (const [side, items] of [['give', parsed.give], ['want', parsed.want.flatMap((want) => want.anyOf)]]) {
-        for (const item of items) {
-            if (item.kind === 'ticket') {
-                if (!hasAttr(item, 'event'))
-                    missing.push(`${side}.ticket.event`);
-                if (!hasAttr(item, 'day'))
-                    missing.push(`${side}.ticket.day`);
-            }
-            if (item.kind === 'sublet') {
-                if (!hasAttr(item, 'dates'))
-                    missing.push(`${side}.sublet.dates`);
-                if (!hasAttr(item, 'rentCents'))
-                    missing.push(`${side}.sublet.rent`);
-            }
-            if (item.kind === 'cash' && (item.amountCents === undefined || item.amountCents <= 0)) {
-                missing.push(`${side}.cash.amount`);
-            }
-        }
-    }
-    return [...new Set(missing)];
+    return missing;
 }
 function questionFor(missing) {
-    const first = missing[0];
-    if (!first)
-        return null;
-    if (first === 'item' || first === 'nonCashItem')
-        return 'What are you offering or looking for?';
-    if (first === 'separateOrTogether')
-        return 'Sell them separately or only together?';
-    if (first.endsWith('.ticket.event'))
-        return 'What event is the ticket for?';
-    if (first.endsWith('.ticket.day'))
-        return 'What day is the ticket for?';
-    if (first.endsWith('.sublet.dates'))
-        return 'What dates is the sublet available?';
-    if (first.endsWith('.sublet.rent'))
-        return 'What is the rent?';
-    if (first.endsWith('.cash.amount'))
-        return 'What amount of cash is part of the trade?';
-    return null;
+    return missing.length > 0 ? 'What are you offering or looking for?' : null;
 }
 function publicFreeText(text) {
     return text
@@ -98,6 +56,7 @@ function createIntent(ownerId, draftId, sourceText, parsed, state, owner) {
         intentId: id,
         version: 0,
         ownerHandle: owner.handle,
+        ownerImageUrl: owner.imageUrl ?? null,
         tier: owner.tier,
         give: parsed.give,
         want: parsed.want,
@@ -144,6 +103,8 @@ export function createDraft(userId, text, source = 'web') {
 }
 async function createDraftParsed(userId, text, source) {
     const parsed = await activeParser(text);
+    // Listing text is later shown to every other user's agent, so this is the main indirect-injection entry point.
+    reportInjection({ surface: 'listing', text, userId, llmFlag: parsed.injectionSuspected });
     const missing = missingFields(parsed);
     const id = randomUUID();
     const expiresAt = clock.now() + DRAFT_LIFETIME_MS;
@@ -261,6 +222,8 @@ async function editIntentPersisted(intentId, userId, text) {
     if (intent.state !== 'open')
         throw new IntentServiceError('Only open intents can be edited', 409);
     const parsed = await activeParser(text);
+    // Listing text is later shown to every other user's agent, so this is the main indirect-injection entry point.
+    reportInjection({ surface: 'listing', text, userId, llmFlag: parsed.injectionSuspected });
     const missing = missingFields(parsed);
     if (missing.length > 0)
         throw new IntentServiceError(`Edited intent is incomplete: ${questionFor(missing)}`, 400);
@@ -302,6 +265,23 @@ async function editIntentPersisted(intentId, userId, text) {
     events.emit('intent.updated', { intentId, privateOnly });
     return updated;
 }
+export async function setStandingLimit(intentId, userId, minCents) {
+    const intent = assertOwner(await activeRepository.get(intentId), userId);
+    if (intent.state !== 'open')
+        throw new IntentServiceError('Only open intents can be changed', 409);
+    const updated = {
+        ...intent,
+        version: intent.version + 1,
+        public: { ...intent.public, version: intent.version + 1 },
+        private: { ...intent.private, minNetCents: minCents, autoApprove: true },
+        updatedAt: clock.now(),
+    };
+    if (!(await activeRepository.saveVersion(updated, intent.version))) {
+        throw new IntentServiceError('Intent changed before the limit could be saved', 409);
+    }
+    events.emit('intent.updated', { intentId, privateOnly: true });
+    return updated;
+}
 export async function withdrawIntent(intentId, userId) {
     const intent = assertOwner(await activeRepository.get(intentId), userId);
     if (intent.state !== 'open')
@@ -310,6 +290,17 @@ export async function withdrawIntent(intentId, userId) {
     if (!withdrawn)
         throw new IntentServiceError('Intent changed before it could be withdrawn', 409);
     events.emit('intent.closed', { intentId });
+}
+export async function deleteIntent(intentId, userId) {
+    const intent = assertOwner(await activeRepository.get(intentId), userId);
+    let state = intent.state;
+    if (state === 'open') {
+        await withdrawIntent(intentId, userId);
+        state = 'withdrawn';
+    }
+    if (!(await activeRepository.remove(intentId, userId, state))) {
+        throw new IntentServiceError('Intent changed before it could be deleted', 409);
+    }
 }
 export async function expireDue() {
     const now = clock.now();

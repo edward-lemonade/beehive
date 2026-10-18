@@ -59,9 +59,13 @@ in production.
   and edward looks for a ticket without specifying a price. Sellers are posted
   before the buyer so both options are available when negotiation begins.
 
-Loading either dataset replaces these three accounts' existing listings. Each
-account must have signed in once with its matching handle. Mock mode can display
-the options but cannot load live seed data.
+Loading either dataset replaces these three accounts' existing listings and
+clears every arrangement involving them, including committed and other historical
+arrangements, their saved declines, and their saved chat history. Connected
+clients are also told to clear their in-memory chat, so old conversation details
+cannot leak into the next LLM request. Arrangements and chat belonging only to
+other accounts are left untouched. Each account must have signed in once with its
+matching handle. Mock mode can display the options but cannot load live seed data.
 
 For a simple purchase without a buyer-named price, the negotiator compares
 matching firm listings for the same wanted item. If a negotiable seller's ask

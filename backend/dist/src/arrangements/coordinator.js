@@ -22,14 +22,14 @@ export async function evaluate() {
         edges.set(intent.id, await getEdges(intent.id));
     const signals = await signalRepo().all();
     const closed = findClosedSets(intents, signals, edges, searchBudget());
-    noteBudget(closed.budgetExhausted);
+    noteBudget(closed.budgetExhausted, 'closed_sets');
     let proposed = 0;
     for (const set of closed.sets) {
         // Seeding from each member surfaces distinct arrangements that share intents.
         const seen = new Set();
         for (const seed of [...set].sort()) {
             const built = buildArrangement(set, intents, edges, searchBudget(), { seed });
-            noteBudget(built.budgetExhausted);
+            noteBudget(built.budgetExhausted, 'build_arrangement');
             if (!built.draft || seen.has(built.draft.key))
                 continue;
             seen.add(built.draft.key);

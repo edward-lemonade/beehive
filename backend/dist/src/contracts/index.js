@@ -30,6 +30,7 @@ export const intentPublicSchema = z.object({
     intentId: z.string(),
     version: z.number().int().nonnegative(),
     ownerHandle: z.string(),
+    ownerImageUrl: z.string().nullable().optional(),
     tier: z.string(),
     give: z.array(itemSchema),
     want: z.array(wantItemSchema),
@@ -39,6 +40,7 @@ export const intentPublicSchema = z.object({
 export const intentPrivateSchema = z.object({
     minNetCents: z.number().nullable(),
     declaredNetCents: z.number().nullable(),
+    autoApprove: z.boolean().optional(),
 });
 export const intentStateSchema = z.enum(['draft', 'open', 'done', 'withdrawn', 'expired']);
 export const edgeCoverSchema = z.object({
@@ -104,14 +106,13 @@ export const termsViewSchema = z.object({
     declaredNetCents: z.number().int().nullable(),
     grade: z.enum(['exact', 'within_tolerance']),
     otherParticipants: z.number().int().nonnegative(),
-});
-export const checklistStepSchema = z.object({
-    id: z.string(),
-    kind: z.enum(['give', 'get', 'cash_out', 'cash_in']),
-    counterpartyHandle: z.string(),
-    contact: z.string().nullable(),
-    description: z.string(),
-    done: z.boolean(),
+    unpriced: z.array(z.object({ otherHandle: z.string(), role: z.enum(['buyer', 'seller']), items: z.array(z.string()) })).optional(),
+    proposal: z.object({
+        amountCents: z.number().int(),
+        otherHandle: z.string(),
+        awaiting: z.enum(['user', 'counterparty']),
+        source: z.enum(['agent', 'user']).optional(),
+    }).optional(),
 });
 export const arrangementSchema = z.object({
     id: z.string(),
