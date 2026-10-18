@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { clock } from '../clock.js';
 import { config } from '../config.js';
 import type { BusBody, Envelope } from '../contracts/index.js';
@@ -41,6 +42,7 @@ class Session {
   private readonly rounds: number;
   private readonly timer: ReturnType<typeof setTimeout>;
   private readonly startedAt = performance.now();
+  private readonly conversationId = randomUUID();
   private readonly agentSpan: Sentry.Span;
   private readonly agentInputs: Array<{ role: 'user'; parts: Array<{ type: 'text'; content: string }> }> = [];
   private readonly agentOutputs: Array<{ role: 'assistant'; parts: Array<{ type: 'text'; content: string }> }> = [];
@@ -54,9 +56,11 @@ class Session {
       attributes: {
         'gen_ai.operation.name': 'invoke_agent',
         'gen_ai.agent.name': 'trade-negotiator',
-        'gen_ai.conversation.id': opts.key,
+        'gen_ai.conversation.id': this.conversationId,
         'agent.conversation.kind': 'agent_agent',
         'link.id': opts.key,
+        'gen_ai.agent.from_id': opts.payerId,
+        'gen_ai.agent.to_id': opts.receiverId,
         ...(opts.arrangementId ? { 'arrangement.id': opts.arrangementId } : {}),
       },
     });
