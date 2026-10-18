@@ -24,8 +24,10 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const postChat = useCallback((message: ChatInput) => {
     chatSeq.current += 1
     const id = chatSeq.current
-    setChat((prev) => appendChat(prev, message, id, Date.now()))
-    const { key, arrangementId, suggest } = message
+    // Every message gets a key so the stored copy can be recognised when the chat is reloaded.
+    const keyed = { ...message, key: message.key ?? crypto.randomUUID() }
+    setChat((prev) => appendChat(prev, keyed, id, Date.now()))
+    const { key, arrangementId, suggest } = keyed
     persist(() => api.saveChatMessage({ from: message.from, text: message.text, ...(key ? { key } : {}), ...(arrangementId ? { arrangementId } : {}), ...(suggest ? { suggest } : {}) }))
   }, [api, persist])
 
