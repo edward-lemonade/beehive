@@ -1,10 +1,10 @@
 import { sql } from '../db/index.js';
 import { confirmDraft, createDraft, deleteIntent, listMine } from '../intents/service.js';
 
-/** Three people who only make a deal together: edward swaps his Saturday and Sunday tickets for dawg's 3-day ticket by selling them to acmm. */
+/** Three people who only make a deal together: edward swaps his Saturday and Sunday tickets for dawg's 3-day ticket by selling them to kat. */
 export const SEED_USERS = [
   { handle: 'edward', text: "I'm getting rid of my Saturday and Sunday tickets in exchange for a 3-day one" },
-  { handle: 'acmm', text: "I'm looking for Saturday and Sunday tickets!" },
+  { handle: 'kat', text: "I'm looking for Saturday and Sunday tickets!" },
   { handle: 'dawg', text: "I'm selling my 3-day ticket for $200" },
 ] as const;
 
@@ -12,15 +12,15 @@ export const SEED_SCENARIOS = [
   {
     id: 'ticket-swap',
     label: 'Original: three-way ticket swap',
-    description: 'Edward swaps Saturday and Sunday tickets for a 3-day ticket through acmm and dawg.',
+    description: 'Edward swaps Saturday and Sunday tickets for a 3-day ticket through kat and dawg.',
     users: SEED_USERS,
   },
   {
     id: 'ticket-shopping',
     label: 'Ticket shopping: find a better deal',
-    description: 'Edward needs a ticket. Acmm asks $100 firm; dawg asks $110 negotiable. Try dawg at $90.',
+    description: 'Edward needs a ticket. kat asks $100 firm; dawg asks $110 negotiable. Try dawg at $90.',
     users: [
-      { handle: 'acmm', text: "I'm selling a ticket for $100, non-negotiable." },
+      { handle: 'kat', text: "I'm selling a ticket for $100, non-negotiable." },
       { handle: 'dawg', text: "I'm selling a ticket for $110, negotiable." },
       { handle: 'edward', text: "I'm looking for a ticket." },
     ],

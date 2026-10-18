@@ -157,7 +157,7 @@ describe('end to end', () => {
     await postScenario(scenario.users.map((user) => ({ id: `u-${user.handle}`, handle: user.handle, tier: 'new' })), scenario.id);
     const intents = [...repo.intents.values()];
     const buyer = intents.find((intent) => intent.public.ownerHandle === 'edward')!;
-    const firm = intents.find((intent) => intent.public.ownerHandle === 'acmm')!;
+    const firm = intents.find((intent) => intent.public.ownerHandle === 'kat')!;
     const negotiable = intents.find((intent) => intent.public.ownerHandle === 'dawg')!;
     expect(buyer.private.minNetCents).toBeNull();
     expect(firm.private.minNetCents).toBe(10000);
@@ -171,7 +171,7 @@ describe('end to end', () => {
     });
     const mine = await service.listMine(buyer.ownerId);
     expect(mine.flatMap((entry) => entry.terms.cashOut)).toEqual(expect.arrayContaining([
-      { toHandle: 'acmm', amountCents: 10000 },
+      { toHandle: 'kat', amountCents: 10000 },
       { toHandle: 'dawg', amountCents: 9000 },
     ]));
     expect(byState('committed')).toHaveLength(0);
@@ -183,7 +183,7 @@ describe('end to end', () => {
       const context = messages[0]!.content;
       expect(context).toContain(`ownIntentId=${buyer.id}`);
       expect(context.match(new RegExp(`ownIntentId=${buyer.id}`, 'g'))).toHaveLength(2);
-      expect(context).toContain('pay $100 to acmm');
+      expect(context).toContain('pay $100 to kat');
       expect(context).toContain('pay $90 to dawg');
       expect(context).toContain("The user's agent offered $90 to dawg");
       expect(context).toContain('waiting for their answer');
@@ -349,9 +349,9 @@ describe('end to end', () => {
   it('leaves a link nobody priced unpriced, tells the seller to name it, and blocks approval', async () => {
     const plainCash: Item = { kind: 'cash', label: 'cash', attrs: {}, qty: 1 };
     add('edward', [ticket('sat'), ticket('sun')], [[ticket('three')]], null);
-    add('acmm', [plainCash], [[ticket('sat')], [ticket('sun')]], null);
+    add('kat', [plainCash], [[ticket('sat')], [ticket('sun')]], null);
     add('dawg', [ticket('three')], [[plainCash]], null);
-    await start('edward', 'acmm', 'dawg');
+    await start('edward', 'kat', 'dawg');
     await waitFor(() => byState('proposed').length === 1);
     const arr = byState('proposed')[0]!;
     expect(arr.links.filter((l) => l.payer).every((l) => l.amountCents === null)).toBe(true);
@@ -364,9 +364,9 @@ describe('end to end', () => {
   it('lets a user approve their own priced link while a link between two others is still unpriced, but never commits unpriced', async () => {
     const plainCash: Item = { kind: 'cash', label: 'cash', attrs: {}, qty: 1 };
     add('edward', [ticket('sat'), ticket('sun')], [[ticket('three')]], -20000);
-    add('acmm', [plainCash], [[ticket('sat')], [ticket('sun')]], null);
+    add('kat', [plainCash], [[ticket('sat')], [ticket('sun')]], null);
     add('dawg', [ticket('three')], [[cash(20000)]], 20000);
-    await start('edward', 'acmm', 'dawg');
+    await start('edward', 'kat', 'dawg');
     await waitFor(() => byState('proposed').length === 1);
     const arr = byState('proposed')[0]!;
     const dawgLink = arr.links.find((l) => l.a === 'dawg' || l.b === 'dawg')!;
@@ -376,7 +376,7 @@ describe('end to end', () => {
     await service.approve('udawg', arr.id);
     expect(byState('proposed')[0]!.slots.find((s) => s.intentId === 'dawg')!.approval).toBe('approved');
     await expect(service.approve('uedward', arr.id)).rejects.toThrow(/price has not been set/);
-    await expect(service.approve('uacmm', arr.id)).rejects.toThrow(/price has not been set/);
+    await expect(service.approve('ukat', arr.id)).rejects.toThrow(/price has not been set/);
     expect(byState('committed')).toHaveLength(0);
   });
 

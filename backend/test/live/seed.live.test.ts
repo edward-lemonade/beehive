@@ -77,7 +77,7 @@ afterEach(() => {
 });
 
 describe('seed scenario: edward needs both deals', () => {
-  it("edward's agent works with both acmm and dawg in one all-or-nothing arrangement", async () => {
+  it("edward's agent works with both kat and dawg in one all-or-nothing arrangement", async () => {
     startDiscovery();
     await startRuntime();
     await startCoordinator({ rehydrate: false });
@@ -89,20 +89,20 @@ describe('seed scenario: edward needs both deals', () => {
     const arr = proposed[0]!;
     expect(arr.slots).toHaveLength(3);
 
-    const [edward, acmm, dawg] = SEED_USERS.map((s) => [...repo.intents.values()].find((i) => i.public.ownerHandle === s.handle)!);
+    const [edward, kat, dawg] = SEED_USERS.map((s) => [...repo.intents.values()].find((i) => i.public.ownerHandle === s.handle)!);
     const linkWith = (other: StoredIntent) => arr.links.find((l) => [l.a, l.b].includes(edward!.id) && [l.a, l.b].includes(other.id));
     expect(linkWith(dawg!)).toBeDefined();
-    expect(linkWith(acmm!)).toBeDefined();
+    expect(linkWith(kat!)).toBeDefined();
 
-    // Edward pays dawg's stated $200 for the 3-day ticket; acmm's purchase is left for edward to price.
+    // Edward pays dawg's stated $200 for the 3-day ticket; kat's purchase is left for edward to price.
     await waitFor(() => linkWith(dawg!)?.amountCents === 20000);
     const dawgLink = linkWith(dawg!)!;
     expect(dawgLink.payer).toBe(edward!.id);
     expect(dawgLink.amountCents).toBe(20000);
-    const acmmLink = linkWith(acmm!)!;
-    expect(acmmLink.payer).toBe(acmm!.id);
-    expect(acmmLink.amountCents).toBeNull();
-    expect(acmmLink.flows).toHaveLength(2);
+    const katLink = linkWith(kat!)!;
+    expect(katLink.payer).toBe(kat!.id);
+    expect(katLink.amountCents).toBeNull();
+    expect(katLink.flows).toHaveLength(2);
 
     // Edward's agent really negotiated with dawg's, and nobody invented a $0 deal.
     const log = await negotiationLog().forIntents([edward!.id], 50);
@@ -112,9 +112,9 @@ describe('seed scenario: edward needs both deals', () => {
     const mine = await service.listMine('u-edward');
     expect(mine).toHaveLength(1);
     const terms = mine[0]!.terms;
-    expect(terms.gives.map((g) => g.toHandle)).toEqual(['acmm', 'acmm']);
+    expect(terms.gives.map((g) => g.toHandle)).toEqual(['kat', 'kat']);
     expect(terms.gets.map((g) => g.fromHandle)).toEqual(['dawg']);
-    expect(terms.unpriced?.map((u) => u.otherHandle)).toEqual(['acmm']);
+    expect(terms.unpriced?.map((u) => u.otherHandle)).toEqual(['kat']);
 
     // Approval is blocked while the Saturday/Sunday sale has no price, so the deal can't half-complete.
     await expect(service.approve('u-edward', arr.id)).rejects.toThrow(/price/i);

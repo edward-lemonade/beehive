@@ -68,7 +68,7 @@ export function createMockApi(): Api {
     clearChatMessages: async () => {},
     seedOptions: async () => [
       { id: 'ticket-swap', label: 'Original: three-way ticket swap', description: 'The original three-way ticket swap.' },
-      { id: 'ticket-shopping', label: 'Ticket shopping: find a better deal', description: 'Edward needs a ticket. Acmm asks $100 firm; dawg asks $110 negotiable.' },
+      { id: 'ticket-shopping', label: 'Ticket shopping: find a better deal', description: 'Edward needs a ticket. kat asks $100 firm; dawg asks $110 negotiable.' },
     ],
     loadSeed: async () => { throw new Error('Seed datasets require the live backend; they are not available in mock mode.') },
     createDraft: async () => draft,

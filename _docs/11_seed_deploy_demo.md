@@ -52,9 +52,9 @@ swap as the default. Both endpoints require authentication and are unavailable
 in production.
 
 - **Original: three-way ticket swap** (`ticket-swap`): edward offers Saturday
-  and Sunday tickets for a 3-day ticket; acmm wants Saturday and Sunday tickets;
+  and Sunday tickets for a 3-day ticket; kat wants Saturday and Sunday tickets;
   dawg offers a 3-day ticket for $200.
-- **Ticket shopping: find a better deal** (`ticket-shopping`): acmm offers a
+- **Ticket shopping: find a better deal** (`ticket-shopping`): kat offers a
   ticket for $100 non-negotiable, dawg offers a ticket for $110 negotiable,
   and edward looks for a ticket without specifying a price. Sellers are posted
   before the buyer so both options are available when negotiation begins.
@@ -66,7 +66,7 @@ the options but cannot load live seed data.
 For a simple purchase without a buyer-named price, the negotiator compares
 matching firm listings for the same wanted item. If a negotiable seller's ask
 is higher, it opens 10% below the cheapest comparable firm price. In the shopping
-dataset edward's agent asks dawg, **"Could you do $90?"**, using acmm's $100
+dataset edward's agent asks dawg, **"Could you do $90?"**, using kat's $100
 listing as the benchmark. This is an opening request, not a claim that dawg has
 accepted; dawg must approve a price below the negotiable ask, and edward must
 also approve before a purchase commits. Without a cheaper comparable firm
