@@ -337,6 +337,23 @@ async function editIntentPersisted(
   return updated;
 }
 
+export async function setStandingLimit(intentId: string, userId: string, minCents: number): Promise<IntentRecord> {
+  const intent = assertOwner(await activeRepository.get(intentId), userId);
+  if (intent.state !== 'open') throw new IntentServiceError('Only open intents can be changed', 409);
+  const updated: IntentRecord = {
+    ...intent,
+    version: intent.version + 1,
+    public: { ...intent.public, version: intent.version + 1 },
+    private: { ...intent.private, minNetCents: minCents, autoApprove: true },
+    updatedAt: clock.now(),
+  };
+  if (!(await activeRepository.saveVersion(updated, intent.version))) {
+    throw new IntentServiceError('Intent changed before the limit could be saved', 409);
+  }
+  events.emit('intent.updated', { intentId, privateOnly: true });
+  return updated;
+}
+
 export async function withdrawIntent(intentId: string, userId: string): Promise<void> {
   const intent = assertOwner(await activeRepository.get(intentId), userId);
   if (intent.state !== 'open') throw new IntentServiceError('Only open intents can be withdrawn', 409);
@@ -353,8 +370,12 @@ export async function withdrawIntent(intentId: string, userId: string): Promise<
 
 export async function deleteIntent(intentId: string, userId: string): Promise<void> {
   const intent = assertOwner(await activeRepository.get(intentId), userId);
-  if (intent.state !== 'withdrawn') throw new IntentServiceError('Only withdrawn intents can be deleted', 409);
-  if (!(await activeRepository.remove(intentId, userId, 'withdrawn'))) {
+  let state = intent.state;
+  if (state === 'open') {
+    await withdrawIntent(intentId, userId);
+    state = 'withdrawn';
+  }
+  if (!(await activeRepository.remove(intentId, userId, state))) {
     throw new IntentServiceError('Intent changed before it could be deleted', 409);
   }
 }

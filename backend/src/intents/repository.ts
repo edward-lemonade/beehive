@@ -38,7 +38,7 @@ export interface IntentRepository {
   expireDue(now: number): Promise<StoredIntent[]>;
   listMine(ownerId: string): Promise<StoredIntent[]>;
   listOpen(): Promise<StoredIntent[]>;
-  /** Deletes the owner's intent in the given state. Returns whether a row was removed. */
+  /** Deletes the owner's intent in the given state (a done intent is only hidden). Returns whether a row was removed. */
   remove(intentId: string, ownerId: string, state: IntentState): Promise<boolean>;
 }
 
@@ -171,6 +171,11 @@ export class PostgresIntentRepository implements IntentRepository {
   }
 
   async remove(intentId: string, ownerId: string, state: IntentState): Promise<boolean> {
+    // A finished deal still backs the other side's contact details, so it is hidden rather than removed.
+    if (state === 'done') {
+      const hidden = await sql`UPDATE intents SET hidden = true WHERE id = ${intentId} AND user_id = ${ownerId} AND state = 'done' RETURNING id`;
+      return hidden.length > 0;
+    }
     const rows = await sql`DELETE FROM intents WHERE id = ${intentId} AND user_id = ${ownerId} AND state = ${state} RETURNING id`;
     return rows.length > 0;
   }
@@ -203,7 +208,7 @@ export class PostgresIntentRepository implements IntentRepository {
 
   async listMine(ownerId: string): Promise<StoredIntent[]> {
     const rows = await sql<IntentRow[]>`
-      SELECT * FROM intents WHERE user_id = ${ownerId} ORDER BY created_at DESC
+      SELECT * FROM intents WHERE user_id = ${ownerId} AND NOT hidden ORDER BY created_at DESC
     `;
     return rows.map(toStoredIntent);
   }

@@ -1,3 +1,4 @@
+import { contactRouter } from './channel/contact.js';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -37,6 +38,7 @@ app.route('/negotiate', negotiationRouter);
 app.route('/arrangements', arrangementsRouter);
 app.route('/map', publicMapRouter);
 app.route('/me', channelRouter);
+app.route('/me', contactRouter);
 app.route('/agent', agentRouter);
 
 installNegotiation();

@@ -46,6 +46,7 @@ export const intentPublicSchema = z.object({
 export const intentPrivateSchema = z.object({
   minNetCents: z.number().nullable(),
   declaredNetCents: z.number().nullable(),
+  autoApprove: z.boolean().optional(),
 });
 
 export const intentStateSchema = z.enum(['draft', 'open', 'done', 'withdrawn', 'expired']);

@@ -4,6 +4,7 @@ import { ApiContext } from './api/context'
 import { createHttpApi } from './api/client'
 import { createMockApi, isMock } from './api/mock'
 import { Dashboard } from './Dashboard'
+import { ContactGate } from './panels/ContactGate'
 
 function Shell({ right, children }: { right: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -22,7 +23,9 @@ function SignedInApp() {
   const api = useMemo(() => createHttpApi(() => getToken()), [getToken])
   return (
     <ApiContext.Provider value={api}>
-      <Dashboard />
+      <ContactGate>
+        <Dashboard />
+      </ContactGate>
     </ApiContext.Provider>
   )
 }

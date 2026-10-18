@@ -15,6 +15,7 @@ import {
   answerDraft,
   confirmDraft,
   createDraft,
+  deleteIntent,
   editIntent,
   expireDue,
   IntentServiceError,
@@ -248,6 +249,14 @@ describe('intent drafts and lifecycle', () => {
     const reopened = await reopenIntent(intent!.id, 'reopen-user');
     expect(reopened.id).not.toBe(draft.id);
     expect(reopened.question).toBeNull();
+  });
+
+  it('deletes an open intent by withdrawing it first', async () => {
+    const draft = await createDraft('delete-user', 'selling a Friday Coachella ticket for $300');
+    const intent = (await confirmDraft(draft.id, 'delete-user', owner))[0];
+    await deleteIntent(intent!.id, 'delete-user');
+    expect((await listPublicIntents()).some((item) => item.intentId === intent?.id)).toBe(false);
+    await expect(deleteIntent(intent!.id, 'delete-user')).rejects.toThrow(IntentServiceError);
   });
 
   it('closes open intents whose deadline has elapsed', async () => {

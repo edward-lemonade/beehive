@@ -52,6 +52,7 @@ export function createMockApi(): Api {
   let committed = false
   let sms = false
   let phone = false
+  let contact: string | null = 'me@example.com'
   const draft: Draft = {
     id: 'draft-1',
     parsed: { give: [], want: [], deadline: null, minNetCents: null, declaredNetCents: null, separateOrTogether: null, injectionSuspected: false, injectionReason: null },
@@ -76,7 +77,7 @@ export function createMockApi(): Api {
     negotiate: async () => ({ status: 'agreed', amountCents: 5000, rounds: 2 }),
     arrangements: async () => [
       committed
-        ? { terms: { ...terms.terms, state: 'committed', approval: 'fulfilled' }, contacts: [{ handle: 'Otter-1002', phone: '+1 555 0100' }] }
+        ? { terms: { ...terms.terms, state: 'committed', approval: 'fulfilled' }, contacts: [{ handle: 'Otter-1002', contact: 'otter@example.com' }] }
         : terms,
     ],
     arrangementAction: async (_id, action, body) => {
@@ -85,6 +86,11 @@ export function createMockApi(): Api {
       return { status: 'ok' }
     },
     channel: async () => ({ channel: sms ? 'sms' : 'app', phoneLinked: phone, phoneTail: phone ? '0100' : null }),
+    contact: async () => contact,
+    setContact: async (next) => {
+      contact = next
+      return next
+    },
     setPhone: async () => {
       phone = true
       return { channel: sms ? 'sms' : 'app', phoneLinked: true, phoneTail: '0100' }

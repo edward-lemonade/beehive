@@ -88,6 +88,7 @@ export function AgentChat() {
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3" role="log" aria-live="polite">
         {chat.map((m) => {
           const entry = m.arrangementId && m.key?.startsWith('card:') ? entries?.find((e) => e.terms.arrangementId === m.arrangementId && e.terms.approval !== 'declined' && e.terms.state === 'committed') : undefined
+          if (entries && m.key?.startsWith('card:') && !entry) return null
           return (
             <div key={m.id} className={`flex flex-col ${m.from === 'me' ? 'items-end' : 'items-start'}`}>
               <p className={`max-w-[85%] break-words rounded-2xl px-3 py-1.5 text-sm ${m.from === 'me' ? 'rounded-br-sm bg-emerald-600 text-white' : 'rounded-bl-sm bg-slate-100 text-slate-900'}`}>{m.text}</p>

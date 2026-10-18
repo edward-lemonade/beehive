@@ -173,7 +173,15 @@ async function dispatchRequests(arr: StoredArrangement, opened: StoredSlot[]): P
   const intents = await loadIntents(arr);
   for (const slot of opened) {
     armApprovalTimer(arr.id, slot);
-    if (!intents.has(slot.intentId)) continue;
+    const intent = intents.get(slot.intentId);
+    if (!intent) continue;
+    const floor = intent.private.minNetCents;
+    if (intent.private.autoApprove && floor != null && !arr.proposal && netFor(arr, slot.intentId) >= floor) {
+      // The user gave a standing limit, so a deal at or above it is approved without asking.
+      const { userId } = slot;
+      setImmediate(() => { approve(userId, arr.id).catch(() => {}); });
+      continue;
+    }
     notify(slot.userId, 'approval_request', {
       arrangementId: arr.id,
       revision: arr.revision,
@@ -513,6 +521,9 @@ async function approveSlotLocked(arr: StoredArrangement, slot: StoredSlot): Prom
     if (slot.approval === 'queued') throw new ArrangementError('This arrangement is waiting for your other pending approvals', 409);
     if (slot.approval !== 'requested') throw notProposed();
 
+    if (!(await contactsFor([slot.userId])).get(slot.userId)) {
+      throw new ArrangementError('Add a public contact in your profile before approving a deal', 409);
+    }
     const mine = arr.links.filter((l) => l.a === slot.intentId || l.b === slot.intentId);
     const check = await ensureAgent(slot.intentId).precheck({
       intentVersion: slot.intentVersion,
@@ -673,14 +684,14 @@ async function commitLocked(arr: StoredArrangement): Promise<void> {
   const contactOf = (userId: string): string | null => contacts.get(userId) ?? null;
 
   for (const slot of committed.slots) {
-    const counterparties = new Map<string, { handle: string; phone: string | null }>();
+    const counterparties = new Map<string, { handle: string; contact: string | null }>();
     for (const link of committed.links) {
       if (link.a !== slot.intentId && link.b !== slot.intentId) continue;
       const other = committed.slots.find((s) => s.intentId === (link.a === slot.intentId ? link.b : link.a));
       if (!other) continue;
       counterparties.set(other.intentId, {
         handle: intents.get(other.intentId)?.public.ownerHandle ?? 'unknown',
-        phone: contactOf(other.userId),
+        contact: contactOf(other.userId),
       });
     }
     notify(slot.userId, 'committed', {
@@ -703,7 +714,7 @@ async function commitLocked(arr: StoredArrangement): Promise<void> {
 
 // ---- reads --------------------------------------------------------------------------------
 
-export type Counterparty = { handle: string; phone: string | null };
+export type Counterparty = { handle: string; contact: string | null };
 export type MineEntry = { terms: TermsView; contacts: Counterparty[] | null };
 
 async function counterpartiesOf(arr: StoredArrangement, slot: StoredSlot, intents: Map<string, StoredIntent>): Promise<Counterparty[]> {
@@ -713,18 +724,20 @@ async function counterpartiesOf(arr: StoredArrangement, slot: StoredSlot, intent
     const other = arr.slots.find((s) => s.intentId === (link.a === slot.intentId ? link.b : link.a));
     if (other) others.set(other.intentId, other);
   }
-  const phones = await contactsFor([...others.values()].map((s) => s.userId));
+  const contacts = await contactsFor([...others.values()].map((s) => s.userId));
   return [...others.values()].map((s) => ({
     handle: intents.get(s.intentId)?.public.ownerHandle ?? 'unknown',
-    phone: phones.get(s.userId) ?? null,
+    contact: contacts.get(s.userId) ?? null,
   }));
 }
 
 export async function listMine(userId: string): Promise<MineEntry[]> {
   const out: MineEntry[] = [];
+  // Intents the user deleted are hidden from them, and so are the deals built on them.
+  const visible = new Set((await getIntentRepository().listMine(userId)).map((i) => i.id));
   for (const arr of await arrangementRepo().listForUser(userId)) {
     const intents = await loadIntents(arr);
-    for (const slot of arr.slots.filter((s) => s.userId === userId && intents.has(s.intentId))) {
+    for (const slot of arr.slots.filter((s) => s.userId === userId && intents.has(s.intentId) && visible.has(s.intentId))) {
       const terms = await viewFor(arr, slot, intents);
       out.push({ terms, contacts: arr.state === 'committed' ? await counterpartiesOf(arr, slot, intents) : null });
     }

@@ -28,6 +28,7 @@ function IntentRow({ intent, onDraft }: { intent: MyIntent; onDraft: (draft: Dra
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['mine-intents'] })
     void queryClient.invalidateQueries({ queryKey: ['public'] })
+    void queryClient.invalidateQueries({ queryKey: ['arrangements'] })
   }
 
   const save = useMutation({ mutationFn: () => api.editIntent(intent.id, text), onSuccess: () => { setEditing(false); refresh() } })
@@ -59,9 +60,7 @@ function IntentRow({ intent, onDraft }: { intent: MyIntent; onDraft: (draft: Dra
         )}
         {isOpen && <button disabled={withdraw.isPending} onClick={() => withdraw.mutate()} className="rounded border border-slate-300 px-2 py-0.5 disabled:opacity-50">Withdraw</button>}
         {isOpen && <button disabled={keep.isPending} onClick={() => keep.mutate()} className="rounded border border-slate-300 px-2 py-0.5 disabled:opacity-50">Push agent</button>}
-        {intent.state === 'withdrawn' && (
-          <button disabled={remove.isPending} onClick={() => remove.mutate()} className="rounded border border-red-300 px-2 py-0.5 text-red-700 disabled:opacity-50">Delete</button>
-        )}
+        <button disabled={remove.isPending} onClick={() => remove.mutate()} className="rounded border border-red-300 px-2 py-0.5 text-red-700 disabled:opacity-50">Delete</button>
         {(intent.state === 'withdrawn' || intent.state === 'expired') && (
           <button disabled={reopen.isPending} onClick={() => reopen.mutate()} className="rounded border border-slate-300 px-2 py-0.5 disabled:opacity-50">Reopen</button>
         )}

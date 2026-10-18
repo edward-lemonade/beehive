@@ -20,7 +20,7 @@ export const myIntentSchema = z.object({
 
 export const mineEntrySchema = z.object({
   terms: termsViewSchema,
-  contacts: z.array(z.object({ handle: z.string(), phone: z.string().nullable() })).nullable(),
+  contacts: z.array(z.object({ handle: z.string(), contact: z.string().nullable() })).nullable(),
 })
 
 export const relevantSchema = z.object({

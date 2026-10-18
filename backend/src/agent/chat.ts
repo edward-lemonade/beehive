@@ -3,7 +3,7 @@ import { approve, decline, listMine as listMineArrangements, negotiateFurther, r
 import { config } from '../config.js';
 import type { TermsView } from '../contracts/index.js';
 import { events } from '../events.js';
-import { getIntentRepository, listMine, listPublicIntents } from '../intents/service.js';
+import { getIntentRepository, listMine, listPublicIntents, setStandingLimit } from '../intents/service.js';
 import { negotiateDirect } from '../negotiation/service.js';
 import { ensureAgent, scheduler } from '../runtime/registry.js';
 
@@ -59,9 +59,11 @@ Ground rules:
 - Never report what another user or agent said, decided or refused unless a tool result or the CONTEXT states it. If you only asked and are waiting, say you asked and are waiting. A price on an arrangement card is only an offer until the user approves it, it is not a final stand by anyone.
 - If the user agrees to the price already shown on the pending arrangement (e.g. "sure, I'll pay $100" when it says $100), that is approve_arrangement. Only a DIFFERENT price is negotiate_arrangement.
 - An OPEN PROPOSAL always has exactly one side to answer. Never tell the user you are waiting if the context says it is waiting on the USER, and never ask the user to decide something the context says they are waiting on the other side for. If a proposal is waiting on the user, say what was proposed and ask. If a proposal is waiting on the other side, say you are waiting.
+- Approval means the user explicitly accepts the price on the table. Remarks like "I'm not negotiating", "no", "my price is firm", "hold" or "I want my price" are NEVER approval. When the user refuses to move off their own price, use negotiate_arrangement with the price from their own listing or the limit they stated (that is a number they gave you); if they only decline, use decline_arrangement. Never approve a price below what the user said they want unless they clearly accept that exact number.
+- Quote prices only from the terms in CONTEXT or in a TOOL RESULT. After approving or committing, state the price in the tool result, never the listing's price.
 - If the user wants a different price, that is negotiate_arrangement, not approval.
 - When the user states a price or a limit for a pending arrangement (for example "I'll only accept $95"), use negotiate_arrangement with that price, then report only the tool result.
-- If the user's price is "negotiable", you don't know what they'd accept, so ask.
+- If the user's price is "negotiable", you don't know what they'd accept, so ask. Once a standing limit is saved (shown in CONTEXT as limit=), do NOT ask the user to approve, hold or counter: your agent negotiates alone within that limit and approves deals at or above it automatically. Only tell them what already happened, and only ask when something falls outside the limit. When the user gives a minimum or tells you to negotiate for them, use set_limit and never just say you will hold a price.
 - A listing with no price is NEGOTIABLE. It does not mean free or $0, and it is never a reason a listing is incompatible. Whether a listing fits depends on the items, not on whether a price is stated. If a tool says a listing is not a possible trade, say the items don't match, never blame a missing price.
 - You cannot create, edit or post listings. If the user wants to list something new, tell them to type it into the "New intent" box in the My intents column. Never claim you created a listing.
 - Your agent already negotiates automatically with matching listings in the background, and anything needing the user's call shows up as a card or an event. Do not start a negotiation on your own initiative, and never mention a price the user or a tool result did not give you.
@@ -75,14 +77,15 @@ You reply with one JSON object and nothing else:
 Actions:
 - {"type":"message_agent","ownIntentId":string,"targetIntentId":string,"targetCents":number|null}  Contact another user's agent about one of THEIR listings, for one of the user's own open intents. targetCents is in cents, only if the user named a price.
 - {"type":"negotiate_arrangement","arrangementId":string,"targetCents":number|null}  Ask the other side to change the price on a pending arrangement. targetCents in cents, only if the user named a price.
-- {"type":"approve_arrangement","arrangementId":string}  Approve a pending arrangement for the user. ONLY when the user's latest message clearly says yes to that specific arrangement as you last described it (for example "yes", "sure", "do it", "sounds good"), and its status is proposed/requested. Never approve on an EVENT, on a counter-offer, or when the user is only asking a question or naming a different price.
+- {"type":"approve_arrangement","arrangementId":string,"amountCents":number}  Approve a pending arrangement for the user. amountCents must be the exact price in cents on the table that the user agreed to (cash they pay or receive in the terms). ONLY when the user's latest message clearly says yes to that specific arrangement as you last described it (for example "yes", "sure", "do it", "sounds good"), and its status is proposed/requested. Never approve on an EVENT, on a counter-offer, or when the user is only asking a question or naming a different price.
+- {"type":"set_limit","intentId":string,"minCents":number}  The user states a standing minimum they'll accept for one of their own open listings (e.g. "never go below 90", "negotiate for me, 90 minimum"). minCents in cents. This is the ONLY way to record a limit; saying you'll hold a price without this action does nothing.
 - {"type":"decline_arrangement","arrangementId":string,"dropDeal":boolean}  When the user clearly says no. If there is an OPEN PROPOSAL waiting on the user, this only turns down that proposed price. Set dropDeal true only if the user wants to abandon the whole deal.
 - {"type":"retract_approval","arrangementId":string}  Take back an approval the user already gave, when they ask to.
 - {"type":"keep_looking","intentId":string}  Make the agent search again for one of the user's intents.
 
 When you are told about an EVENT, there is no user message. Just tell the user in your own words what happened and what you suggest, using the event's facts. Set action to null.`;
 
-type Ctx = { own: Array<{ id: string; state: string; text: string }>; others: Array<{ id: string; handle: string; text: string }>; arrangements: string[]; arrangementIds: Set<string> };
+type Ctx = { own: Array<{ id: string; state: string; text: string; limit: number | null }>; others: Array<{ id: string; handle: string; text: string }>; arrangements: string[]; arrangementIds: Set<string> };
 
 function termsLine(t: TermsView): string {
   const parts = [
@@ -105,7 +108,7 @@ async function buildContext(userId: string): Promise<Ctx> {
   const mineIds = new Set(mine.map((i) => i.id));
   const live = arrangements.filter((a) => a.terms.approval !== 'declined' && ['proposed', 'committed'].includes(a.terms.state));
   return {
-    own: mine.filter((i) => i.state !== 'withdrawn').map((i) => ({ id: i.id, state: i.state, text: clip(i.public.freeText, 200) })),
+    own: mine.filter((i) => i.state !== 'withdrawn').map((i) => ({ id: i.id, state: i.state, text: clip(i.public.freeText, 200), limit: i.private?.autoApprove ? i.private.minNetCents : null })),
     others: open.filter((i) => !mineIds.has(i.intentId)).slice(0, 40).map((i) => ({ id: i.intentId, handle: i.ownerHandle, text: clip(i.freeText, 160) })),
     arrangements: await Promise.all(live.map(async (a) => {
       const t = a.terms;
@@ -125,7 +128,7 @@ async function buildContext(userId: string): Promise<Ctx> {
 
 function renderContext(ctx: Ctx): string {
   const lines = ['CONTEXT', "The user's own intents:"];
-  lines.push(...(ctx.own.length ? ctx.own.map((i) => `- id=${i.id} [${i.state}] ${JSON.stringify(i.text)}`) : ['- none']));
+  lines.push(...(ctx.own.length ? ctx.own.map((i) => `- id=${i.id} [${i.state}] ${JSON.stringify(i.text)}${i.limit != null ? ` limit=${money(i.limit)} (standing: agent negotiates and approves alone)` : ''}`) : ['- none']));
   lines.push("Other users' open listings:");
   lines.push(...(ctx.others.length ? ctx.others.map((i) => `- id=${i.id} user=${i.handle} ${JSON.stringify(i.text)}`) : ['- none']));
   lines.push('Pending or committed arrangements for the user:');
@@ -136,9 +139,10 @@ function renderContext(ctx: Ctx): string {
 type Action =
   | { type: 'message_agent'; ownIntentId: string; targetIntentId: string; targetCents?: number | null }
   | { type: 'negotiate_arrangement'; arrangementId: string; targetCents?: number | null }
-  | { type: 'approve_arrangement'; arrangementId: string }
+  | { type: 'approve_arrangement'; arrangementId: string; amountCents?: number | null }
   | { type: 'decline_arrangement'; arrangementId: string; dropDeal?: boolean }
   | { type: 'retract_approval'; arrangementId: string }
+  | { type: 'set_limit'; intentId: string; minCents: number }
   | { type: 'keep_looking'; intentId: string };
 
 function parseModel(raw: string): { reply: string; action: Action | null } {
@@ -205,17 +209,31 @@ export async function runAgentChat(input: AgentChatInput): Promise<AgentChatResu
         case 'retract_approval': {
           if (!input.message) return 'Approvals can only follow a message from the user.';
           if (!ctx.arrangementIds.has(action.arrangementId)) return 'No such pending arrangement.';
+          if (action.type === 'approve_arrangement') {
+            const current = (await listMineArrangements(user.id)).find((a) => a.terms.arrangementId === action.arrangementId)?.terms;
+            const price = current?.cashOut[0]?.amountCents ?? current?.cashIn[0]?.amountCents;
+            if (price !== undefined && action.amountCents !== price) {
+              return `Not approved. The price on the table is ${money(price)}, and approval must name exactly the price the user agreed to. Ask the user if ${money(price)} is OK, or negotiate a different price.`;
+            }
+          }
           const run = action.type === 'approve_arrangement' ? approve : retract;
           if (action.type === 'decline_arrangement') await decline(user.id, action.arrangementId, { dropDeal: action.dropDeal === true });
           else await run(user.id, action.arrangementId);
           changed = true;
           const after = (await listMineArrangements(user.id)).find((a) => a.terms.arrangementId === action.arrangementId);
+          const priceNow = after ? termsLine(after.terms) : '';
           const note = action.type === 'approve_arrangement'
             ? after?.terms.state === 'committed'
-              ? 'Approved, and the other side had already approved, so the deal is committed. Tell them the contact details of the other side are in the deal card so they can finish it off the platform; the platform does not track whether it succeeds.'
-              : 'Approved. The deal is not committed yet because it still waits on the other side. Say that.'
+              ? `Final terms: ${priceNow}. State only the price in these terms. Approved, and the other side had already approved, so the deal is committed. Tell them the contact details of the other side are in the deal card so they can finish it off the platform; the platform does not track whether it succeeds.`
+              : `Terms: ${priceNow}. Approved. The deal is not committed yet because it still waits on the other side. Say that.`
             : action.type === 'decline_arrangement' ? 'Declined. Say you passed on it.' : 'Approval retracted.';
           return note;
+        }
+        case 'set_limit': {
+          if (!Number.isInteger(action.minCents) || action.minCents <= 0) return 'The limit must be a positive amount in cents.';
+          await setStandingLimit(action.intentId, user.id, action.minCents);
+          changed = true;
+          return `Saved. The user's agent will now negotiate on its own and never go below ${money(action.minCents)}. A deal at or above that is approved automatically; anything below is refused without asking the user.`;
         }
         case 'keep_looking': {
           const intent = await getIntentRepository().get(action.intentId);

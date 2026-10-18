@@ -15,7 +15,7 @@ export function CommittedDeal({ entry }: { entry: MineEntry }) {
       <p className="mt-2 text-xs text-slate-600">
         {contacts.length === 0
           ? 'Contact details are not available yet.'
-          : `Arrange the rest directly: ${contacts.map((c) => `${c.handle} ${c.phone ?? '(no contact on file)'}`).join(' · ')}`}
+          : `Arrange the rest directly: ${contacts.map((c) => `${c.handle} ${c.contact ?? '(no contact on file)'}`).join(' · ')}`}
       </p>
     </div>
   )

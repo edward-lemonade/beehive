@@ -162,6 +162,24 @@ describe('end to end', () => {
     expect(mine[0]!.contacts!.length).toBeGreaterThan(0);
   });
 
+  it('approves by itself for a user with a standing limit the deal meets, without asking', async () => {
+    chain();
+    (repo.intents.get('carol')!.private as { autoApprove?: boolean }).autoApprove = true;
+    await start('alice', 'bob', 'carol');
+    await waitFor(() => rows().some((r) => r.slots.some((sl) => sl.intentId === 'carol' && sl.approval === 'approved')));
+    expect(kinds('ucarol', 'approval_request')).toHaveLength(0);
+    expect(kinds('ubob', 'approval_request').length).toBeGreaterThan(0);
+  });
+
+  it('refuses approval from a user with no public contact', async () => {
+    chain();
+    await start('alice', 'bob', 'carol');
+    await waitFor(() => byState('proposed').length === 1);
+    const id = byState('proposed')[0]!.id;
+    setContactLookup(async (ids) => new Map(ids.map((i) => [i, null] as const)));
+    await expect(service.approve('ubob', id)).rejects.toThrow(/public contact/);
+  });
+
   it('S2: a decline is replaced by a new participant at the old amounts; only they are asked', async () => {
     chain();
     await start('alice', 'bob', 'carol');

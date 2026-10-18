@@ -14,6 +14,7 @@ import { AgentChat } from '../panels/AgentChat'
 import { AgentWindow } from '../panels/AgentWindow'
 import { dollarsToCents } from '../lib/format'
 import { CommittedDeal } from '../panels/Approvals'
+import { ContactGate } from '../panels/ContactGate'
 
 function wrap(api: Api, ui: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -63,7 +64,7 @@ describe('committed deal', () => {
     await api.arrangementAction('arr-1', 'approve')
     const [entry] = await api.arrangements()
     wrap(api, <CommittedDeal entry={entry!} />)
-    expect(screen.getByText(/Otter-1002 \+1 555 0100/)).toBeInTheDocument()
+    expect(screen.getByText(/Otter-1002 otter@example.com/)).toBeInTheDocument()
   })
 })
 
@@ -153,5 +154,30 @@ describe('agent window', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
     fireEvent.click(screen.getByLabelText('Show agent conversations'))
     expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+})
+
+describe('contact gate', () => {
+  it('blocks the app until a contact is saved', async () => {
+    const api = createMockApi()
+    await api.setContact('')
+    vi.spyOn(api, 'contact').mockResolvedValueOnce(null)
+    wrap(api, <ContactGate><p>app</p></ContactGate>)
+    fireEvent.change(await screen.findByLabelText('Public contact'), { target: { value: 'a@b.co' } })
+    fireEvent.click(screen.getByText('Continue'))
+    expect(await screen.findByText('app')).toBeInTheDocument()
+  })
+})
+
+describe('contact edit', () => {
+  it('lets the user change their contact', async () => {
+    const api = createMockApi()
+    const spy = vi.spyOn(api, 'setContact')
+    wrap(api, <ContactGate><p>app</p></ContactGate>)
+    fireEvent.click(await screen.findByText('Edit'))
+    fireEvent.change(screen.getByLabelText('Public contact'), { target: { value: 'new@x.co' } })
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(spy).toHaveBeenCalledWith('new@x.co'))
+    expect(await screen.findByText(/new@x.co/)).toBeInTheDocument()
   })
 })
