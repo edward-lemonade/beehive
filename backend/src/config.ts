@@ -10,6 +10,7 @@ const envSchema = z.object({
   PHOTON_PROJECT_ID: z.string().optional().default(''),
   PHOTON_PROJECT_SECRET: z.string().optional().default(''),
   PHOTON_WEBHOOK_SECRET: z.string().optional().default(''),
+  PHOTON_PHONE_NUMBER: z.string().optional().default(''),
   CHANNEL: z.enum(['photon', 'terminal']),
   SENTRY_DSN_API: z.string().optional().default(''),
   SENTRY_ENVIRONMENT: z.string().optional(),
@@ -30,7 +31,7 @@ const envSchema = z.object({
   VITE_SENTRY_DSN: z.string().optional(),
 }).superRefine((values, context) => {
   if (values.CHANNEL === 'photon') {
-    for (const key of ['PHOTON_PROJECT_ID', 'PHOTON_PROJECT_SECRET', 'PHOTON_WEBHOOK_SECRET'] as const) {
+    for (const key of ['PHOTON_PROJECT_ID', 'PHOTON_PROJECT_SECRET', 'PHOTON_WEBHOOK_SECRET', 'PHOTON_PHONE_NUMBER'] as const) {
       if (!values[key]) {
         context.addIssue({
           code: 'custom',
@@ -38,6 +39,13 @@ const envSchema = z.object({
           message: `${key} is required when CHANNEL=photon`,
         });
       }
+    }
+    if (values.PHOTON_PHONE_NUMBER && !/^\+[1-9]\d{6,14}$/.test(values.PHOTON_PHONE_NUMBER)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['PHOTON_PHONE_NUMBER'],
+        message: 'PHOTON_PHONE_NUMBER must use E.164 format',
+      });
     }
   }
 });

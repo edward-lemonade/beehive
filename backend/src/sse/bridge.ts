@@ -2,6 +2,7 @@ import { events } from '../events.js';
 import { getIntentRepository } from '../intents/service.js';
 import { routeToUser, smsTextFor } from '../channel/service.js';
 import { saveChat } from '../agent/messages.js';
+import { Sentry } from '../observability/telemetry.js';
 import { sseHub } from './hub.js';
 
 let installed = false;
@@ -18,8 +19,20 @@ export function installSseBridge(): void {
   });
 
   events.on('notify', ({ userId, kind, payload }) => {
-    void routeToUser(userId, smsTextFor(kind, payload ?? {})).then((viaApp) => {
+    void (async () => {
+      const details = payload ?? {};
+      const text = smsTextFor(kind, details);
+      const ref = typeof details.arrangementId === 'string' ? details.arrangementId
+        : typeof details.intentId === 'string' ? details.intentId
+        : JSON.stringify(details);
+      const viaApp = await routeToUser(userId, text, `notify:${kind}:${ref}`);
       if (viaApp) sseHub.publishToUser(userId, { type: 'notify', payload: { kind, ...payload } });
+      else if (text) {
+        await saveChat(userId, { from: 'agent', text, key: `sms-notify:${kind}:${ref}` });
+      }
+    })().catch((error) => {
+      console.error('Notification delivery failed:', error instanceof Error ? error.message : error);
+      Sentry.captureException(error, { tags: { 'messaging.direction': 'outbound', 'messaging.kind': kind } });
     });
   });
 
@@ -49,10 +62,21 @@ export function installSseBridge(): void {
       const handle = (await repo.get(intentId))?.public.ownerHandle ?? 'The other user';
       const direct = new Set(arr.links.flatMap((l) => (l.a === intentId ? [l.b] : l.b === intentId ? [l.a] : [])));
       for (const slot of arr.slots.filter((s) => direct.has(s.intentId))) {
-        await saveChat(slot.userId, { from: 'agent', text: `${handle} approved their side of the deal.`, key: `approved:${arrangementId}:${intentId}:${arr.revision}`, arrangementId });
-        sseHub.publishToUser(slot.userId, { type: 'chat.message', payload: { arrangementId } });
+        try {
+          const text = `${handle} approved their side of the deal.`;
+          await saveChat(slot.userId, { from: 'agent', text, key: `approved:${arrangementId}:${intentId}:${arr.revision}`, arrangementId });
+          if (await routeToUser(slot.userId, text, `approved:${arrangementId}:${intentId}:${arr.revision}`)) {
+            sseHub.publishToUser(slot.userId, { type: 'chat.message', payload: { arrangementId } });
+          }
+        } catch (error) {
+          console.error('Approval update delivery failed:', error instanceof Error ? error.message : error);
+          Sentry.captureException(error, { tags: { 'messaging.direction': 'outbound', 'arrangement.id': arrangementId } });
+        }
       }
-    })().catch(() => {});
+    })().catch((error) => {
+      console.error('Approval update processing failed:', error instanceof Error ? error.message : error);
+      Sentry.captureException(error, { tags: { 'arrangement.id': arrangementId } });
+    });
   });
 
   for (const name of ['arrangement.proposed', 'arrangement.updated', 'arrangement.committed', 'arrangement.dissolved', 'slot.vacated'] as const) {

@@ -9,6 +9,7 @@ import { config } from './config.js';
 import { sseHub } from './sse/hub.js';
 import { agentRouter } from './agent/routes.js';
 import { channelRouter } from './channel/routes.js';
+import { createPhotonAdapter } from './channel/photon.js';
 import { discoveryRouter } from './discovery/routes.js';
 import { installNegotiation } from './negotiation/session.js';
 import { negotiationRouter } from './negotiation/routes.js';
@@ -29,6 +30,7 @@ import { Sentry } from './observability/telemetry.js';
 const app = new Hono();
 // Sentry.init runs in src/instrument.ts (loaded with --import); this only instruments requests.
 app.use(sentry(app));
+const photon = config.CHANNEL === 'photon' ? await createPhotonAdapter() : null;
 
 app.use('*', logger());
 app.use('*', cors({
@@ -60,6 +62,7 @@ app.route('/me', channelRouter);
 app.route('/me', contactRouter);
 app.route('/agent', agentRouter);
 app.route('/dev', seedRouter);
+if (photon) app.post('/webhooks/photon', (c) => photon.webhook(c.req.raw));
 if (config.DEMO_MODE) app.route('/demo', demoRouter);
 
 installNegotiation();
@@ -83,6 +86,15 @@ app.notFound((c) => c.json({ ok: false, error: 'Not found' }, 404));
 
 if (!process.env.VITEST) {
   const port = Number(process.env.PORT ?? 3000);
+  if (photon) {
+    const stopPhoton = () => {
+      void photon.stop().catch((error) => {
+        console.error('Photon shutdown failed:', error instanceof Error ? error.message : error);
+      });
+    };
+    process.once('SIGTERM', stopPhoton);
+    process.once('SIGINT', stopPhoton);
+  }
   serve({ fetch: app.fetch, port }, () => console.log(`API listening on :${port}`));
 }
 

@@ -1,12 +1,18 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { requireAuth } from '../auth.js';
+import { createLinkCode, PhoneLinkError } from './linking.js';
 import { ChannelError, getSettings, savePhone, switchChannel } from './service.js';
 
 export const channelRouter = new Hono();
 channelRouter.use('*', requireAuth);
 
-const view = (s: { channel: string; phone: string | null }) => ({ ok: true, channel: s.channel, phoneLinked: s.phone !== null, phoneTail: s.phone ? s.phone.slice(-4) : null });
+const view = (s: { channel: string; phone: string | null; phoneVerified: boolean }) => ({
+  ok: true,
+  channel: s.channel,
+  phoneLinked: s.phone !== null && s.phoneVerified,
+  phoneTail: s.phone ? s.phone.slice(-4) : null,
+});
 
 channelRouter.get('/channel', async (c) => c.json(view(await getSettings(c.get('user').id))));
 
@@ -30,6 +36,15 @@ channelRouter.post('/phone', async (c) => {
     return c.json(view(await getSettings(userId)));
   } catch (error) {
     if (error instanceof ChannelError) return c.json({ ok: false, error: error.message }, error.status);
+    throw error;
+  }
+});
+
+channelRouter.post('/link-code', async (c) => {
+  try {
+    return c.json({ ok: true, ...(await createLinkCode(c.get('user').id)) });
+  } catch (error) {
+    if (error instanceof PhoneLinkError) return c.json({ ok: false, error: error.message }, error.status);
     throw error;
   }
 });

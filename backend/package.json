@@ -6,7 +6,8 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:live": "vitest run --config vitest.live.config.ts",
-    "db:migrate": "node --env-file=.env --import tsx scripts/migrate.ts",
+    "db:migrate": "node --import tsx scripts/migrate.ts",
+    "db:migrate:local": "node --env-file=.env --import tsx scripts/migrate.ts",
     "lint": "eslint . --ext .ts",
     "dev": "node --env-file=.env --import tsx --import ./src/instrument.ts --watch src/index.ts",
     "start": "node --env-file=.env --import tsx --import ./src/instrument.ts src/index.ts",
@@ -22,6 +23,7 @@
     "drizzle-orm": "^0.36.4",
     "hono": "^4.6.20",
     "postgres": "^3.2.0",
+    "spectrum-ts": "^12.11.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
