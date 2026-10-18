@@ -183,9 +183,11 @@ export function MyIntents() {
     <section aria-label="Your intents" className="dashboard-panel panel-mine flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-amber-900/10 px-4 py-4">
         <h2 className="text-lg font-semibold">Your intents</h2>
-        <button disabled={seed.isPending} aria-haspopup="dialog" aria-controls="seed-picker" onClick={() => { seed.reset(); setChoosingSeed(true) }} className="rounded-lg border border-amber-900/15 bg-white/70 px-2 py-1 text-xs disabled:opacity-50">
-          {seed.isPending ? 'Loading…' : 'Load seed data'}
-        </button>
+        {import.meta.env.DEV && (
+          <button disabled={seed.isPending} aria-haspopup="dialog" aria-controls="seed-picker" onClick={() => { seed.reset(); setChoosingSeed(true) }} className="rounded-lg border border-amber-900/15 bg-white/70 px-2 py-1 text-xs disabled:opacity-50">
+            {seed.isPending ? 'Loading…' : 'Load seed data'}
+          </button>
+        )}
       </div>
       <dialog
         ref={seedDialog}
