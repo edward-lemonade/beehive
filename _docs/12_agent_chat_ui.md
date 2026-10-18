@@ -103,3 +103,25 @@ cannot turn approval of an old price into approval of a new one.
 Backend unit checks stub the model to verify its factual inputs and that its
 returned text is used unchanged; they do not validate live-model wording.
 Seed definitions contain listings, not agent responses.
+
+### Market-level updates
+
+Chat coalesces nearby arrangement revisions over a 600 ms quiet window and sends
+one `market_update` event instead of a separate approval request for each
+listing. Superseded in-flight replies are ignored; revisions are marked announced
+only once the combined reply is delivered.
+
+The backend discards cached event prices and exposes `ownIntentId` alongside each
+arrangement so the model can compare alternatives for the same need. Both market
+updates and legacy approval events ask the model to assess the full current
+market, distinguish listed asks from actual offers and acceptance, and recommend
+one next step. A fallback plus an outstanding negotiation should be a single
+progress update, not two purchase prompts. Unrelated or partial matches are not
+automatically interchangeable.
+
+This is model reasoning, not a seller-specific ranking or response template.
+Background negotiation still performs outreach; the notification turn cannot
+approve, counter, or send duplicate messages. It must not claim a negotiation
+started unless the persisted proposal or tool/log records show it did. Final
+approval still requires an explicit user message. The quiet window groups nearby
+updates, not updates arriving arbitrarily far apart.

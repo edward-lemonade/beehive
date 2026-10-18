@@ -177,6 +177,35 @@ describe('end to end', () => {
     expect(byState('committed')).toHaveLength(0);
 
     const shoppingDeal = mine.find((entry) => entry.terms.cashOut.some((cash) => cash.toHandle === 'dawg'))!;
+    let marketCalls = 0;
+    setChatCompleter(async (messages) => {
+      marketCalls++;
+      const context = messages[0]!.content;
+      expect(context).toContain(`ownIntentId=${buyer.id}`);
+      expect(context.match(new RegExp(`ownIntentId=${buyer.id}`, 'g'))).toHaveLength(2);
+      expect(context).toContain('pay $100 to acmm');
+      expect(context).toContain('pay $90 to dawg');
+      expect(context).toContain("The user's agent offered $90 to dawg");
+      expect(context).toContain('waiting for their answer');
+      const event = messages[messages.length - 1]!.content;
+      expect(event).toContain('Review the market as a whole');
+      expect(event).toContain(shoppingDeal.terms.arrangementId);
+      expect(event).not.toContain('11000');
+      expect(event).not.toContain('unowned-arrangement');
+      return JSON.stringify({ reply: 'model-output-market-review', action: null });
+    });
+    const review = await runAgentChat({
+      user: { id: buyer.ownerId, handle: 'edward', tier: 'new' },
+      event: {
+        kind: 'market_update',
+        arrangementIds: [...mine.map((entry) => entry.terms.arrangementId), 'unowned-arrangement'],
+        amountCents: 11000,
+      },
+      history: [],
+    });
+    expect(marketCalls).toBe(1);
+    expect(review.reply).toBe('model-output-market-review');
+    expect(review.changed).toBe(false);
     expect(shoppingDeal.terms.proposal).toMatchObject({
       amountCents: 9000, otherHandle: 'dawg', awaiting: 'counterparty', source: 'agent',
     });

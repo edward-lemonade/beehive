@@ -135,4 +135,25 @@ describe('agent chat', () => {
     await runAgentChat({ user, message: "i'm not negotiating price", history: [] });
     expect(approve).not.toHaveBeenCalled();
   });
+
+  it('reviews market updates without allowing notification-driven decisions or outreach', async () => {
+    const script = [
+      JSON.stringify({ reply: '', action: { type: 'approve_arrangement', arrangementId: 'arr-1', amountCents: 9000 } }),
+      JSON.stringify({ reply: '', action: { type: 'negotiate_arrangement', arrangementId: 'arr-1', targetCents: 8000 } }),
+      JSON.stringify({ reply: 'model-output-market-review', action: null }),
+    ];
+    setChatCompleter(async (messages) => {
+      expect(messages[0]!.content).toContain('Do not turn every matching listing into a separate approval pitch');
+      expect(messages[0]!.content).toContain('an informative progress update needs no question');
+      return script.shift()!;
+    });
+    const out = await runAgentChat({
+      user, event: { kind: 'market_update', arrangementIds: ['arr-1'] }, history: [],
+    });
+    expect(out.reply).toBe('model-output-market-review');
+    expect(out.changed).toBe(false);
+    expect(approve).not.toHaveBeenCalled();
+    expect(negotiateFurther).not.toHaveBeenCalled();
+    expect(negotiateDirect).not.toHaveBeenCalled();
+  });
 });

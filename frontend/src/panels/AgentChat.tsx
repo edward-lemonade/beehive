@@ -31,35 +31,31 @@ export function AgentChat() {
   }
   useEffect(seed, [entries, postChat])
 
-  // Announce persisted revisions, never prices from in-flight negotiation events.
+  // Coalesce nearby persisted updates into one market review, not one approval pitch per listing.
   useEffect(() => {
-    let active = true
-    const pending = new Set<string>()
-    const seen = announced.current
-    for (const e of entries ?? []) {
-      const t = e.terms
-      if (t.state !== 'proposed' || t.approval !== 'requested') continue
+    const updates = (entries ?? []).flatMap(({ terms: t }) => {
+      if (t.state !== 'proposed' || t.approval !== 'requested') return []
       const key = `ask:${t.arrangementId}:r${t.revision}:${t.proposal?.awaiting ?? 'approval'}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      pending.add(key)
-      api.agentChat({ event: { kind: 'approval_request', arrangementId: t.arrangementId }, history: chat.slice(-16).map((m) => ({ from: m.from, text: m.text })) })
+      return announced.current.has(key) ? [] : [{ key, arrangementId: t.arrangementId }]
+    })
+    if (!updates.length) return
+    let active = true
+    const timer = setTimeout(() => {
+      api.agentChat({ event: { kind: 'market_update', arrangementIds: updates.map((u) => u.arrangementId) }, history: chat.slice(-16).map((m) => ({ from: m.from, text: m.text })) })
         .then((r) => {
-          if (active) postChat({ from: 'agent', text: r.reply, key, arrangementId: t.arrangementId })
+          if (!active) return
+          for (const update of updates) announced.current.add(update.key)
+          postChat({ from: 'agent', text: r.reply, key: `ask:market:${updates.map((u) => u.key).sort().join('|')}` })
         })
         .catch((error: unknown) => {
-          if (active) {
-            seen.delete(key)
-            setError(errorMessage(error))
-          }
+          if (active) setError(errorMessage(error))
         })
-        .finally(() => pending.delete(key))
-    }
+    }, 600)
     return () => {
       active = false
-      for (const key of pending) seen.delete(key)
+      clearTimeout(timer)
     }
-  }, [entries]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [entries, api, postChat, chat])
 
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: 'end' })
