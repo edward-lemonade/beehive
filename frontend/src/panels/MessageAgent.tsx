@@ -41,9 +41,7 @@ export function MessageAgent({ ownIntentId, targetIntentId, onClose }: Props) {
       {send.isError && <p role="alert" className="mt-2 text-sm text-red-600">{errorMessage(send.error)}</p>}
       {result && (
         <p className="mt-2 text-sm text-slate-700">
-          {result.status === 'agreed' && result.amountCents !== undefined
-            ? `Agreed at ${money(result.amountCents)}. See the agent window for the conversation.`
-            : `Result: ${result.status.replace(/_/g, ' ')}. See the agent window.`}
+          {messageOutcome(result.status, result.amountCents)}
         </p>
       )}
       <div className="mt-3 flex gap-2">

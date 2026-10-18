@@ -55,7 +55,7 @@ export function installSseBridge(): void {
     })().catch(() => {});
   });
 
-  for (const name of ['arrangement.proposed', 'arrangement.committed', 'arrangement.dissolved', 'slot.vacated'] as const) {
+  for (const name of ['arrangement.proposed', 'arrangement.updated', 'arrangement.committed', 'arrangement.dissolved', 'slot.vacated'] as const) {
     events.on(name, (payload) => {
       void (async () => {
         const arr = await (await import('../arrangements/repository.js')).arrangementRepo().get(payload.arrangementId);

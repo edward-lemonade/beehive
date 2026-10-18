@@ -47,6 +47,8 @@ export function chatFor(event: StreamEvent, intents: MyIntent[] | undefined): Ch
     case 'notify':
       switch (d.kind) {
         case 'needs_user': {
+          // Arrangement updates are announced from persisted terms, not an in-flight negotiation event.
+          if (aid) return null
           const side = d.side === 'receiver' ? 'receiver' : 'payer'
           const cents = typeof d.amountCents === 'number' ? d.amountCents : undefined
           return { from: 'agent', text: speech.needsYourCall(side, handleOf(d), cents, d.multi === true), ...(aid ? { key: `need:${aid}:${cents}` } : {}) }

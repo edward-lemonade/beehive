@@ -50,6 +50,7 @@ export type LinkResult = {
   reason?: string;
   /** The price is the counterpart's ask, and the payer's user has not yet confirmed it. */
   pendingUser?: boolean;
+  pendingSide?: Side;
 };
 
 export function withinBounds(side: Side, amountCents: number, bounds: Bounds): boolean {
@@ -104,7 +105,7 @@ export function linkBounds(
   target: LinkTerms,
   payerBounds: Bounds,
   receiverBounds: Bounds,
-  anchors: { payerOpenCents?: number; receiverAskCents?: number } = {},
+  anchors: { payerOpenCents?: number; receiverAskCents?: number; competitiveOpenCents?: number } = {},
 ): LinkBounds {
   const ask = target.receiverFirm ? receiverBounds.minCents : (anchors.receiverAskCents ?? target.askCents ?? receiverBounds.minCents);
   // A payer with no stated price opens at a share of the ask and never pays more than the ask.
@@ -113,7 +114,7 @@ export function linkBounds(
   const payer = unstated && payerBounds.maxCents > ask ? { ...payerBounds, maxCents: ask } : payerBounds;
   const open = target.payerFirm
     ? payer.maxCents
-    : (anchors.payerOpenCents ?? target.payCents ?? (negotiable ? Math.round(ask * NEGOTIABLE_OPEN_SHARE) : 0));
+    : (anchors.payerOpenCents ?? target.payCents ?? (negotiable ? (anchors.competitiveOpenCents ?? Math.round(ask * NEGOTIABLE_OPEN_SHARE)) : 0));
   return {
     payer,
     receiver: receiverBounds,

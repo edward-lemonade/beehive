@@ -24,7 +24,6 @@ export function AgentChat() {
 
   const announced = useRef(new Set<string>())
   const seed = () => {
-    announced.current.clear()
     postChat({ from: 'agent', text: speech.greeting(), key: 'greeting' })
     for (const e of entries ?? []) {
       if (e.terms.state === 'committed' && e.terms.approval !== 'declined') postChat({ from: 'agent', text: speech.committed(), arrangementId: e.terms.arrangementId, key: `card:${e.terms.arrangementId}` })
@@ -32,18 +31,33 @@ export function AgentChat() {
   }
   useEffect(seed, [entries, postChat])
 
-  // An arrangement waiting on the user is put to them in words, once per price, by the agent.
+  // Announce persisted revisions, never prices from in-flight negotiation events.
   useEffect(() => {
+    let active = true
+    const pending = new Set<string>()
+    const seen = announced.current
     for (const e of entries ?? []) {
       const t = e.terms
       if (t.state !== 'proposed' || t.approval !== 'requested') continue
-      const price = t.cashOut[0]?.amountCents ?? t.cashIn[0]?.amountCents ?? 0
-      const key = `ask:${t.arrangementId}:${price}`
-      if (announced.current.has(key)) continue
-      announced.current.add(key)
-      api.agentChat({ event: { kind: 'approval_request', arrangementId: t.arrangementId, amountCents: price }, history: chat.slice(-16).map((m) => ({ from: m.from, text: m.text })) })
-        .then((r) => postChat({ from: 'agent', text: r.reply, key }))
-        .catch(() => postChat({ from: 'agent', text: speech.matchFound(), key }))
+      const key = `ask:${t.arrangementId}:r${t.revision}:${t.proposal?.awaiting ?? 'approval'}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      pending.add(key)
+      api.agentChat({ event: { kind: 'approval_request', arrangementId: t.arrangementId }, history: chat.slice(-16).map((m) => ({ from: m.from, text: m.text })) })
+        .then((r) => {
+          if (active) postChat({ from: 'agent', text: r.reply, key, arrangementId: t.arrangementId })
+        })
+        .catch((error: unknown) => {
+          if (active) {
+            seen.delete(key)
+            setError(errorMessage(error))
+          }
+        })
+        .finally(() => pending.delete(key))
+    }
+    return () => {
+      active = false
+      for (const key of pending) seen.delete(key)
     }
   }, [entries]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -93,7 +107,7 @@ export function AgentChat() {
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-emerald-900/10 px-4 py-4">
         <h2 className="text-lg font-semibold">Your agent</h2>
         <div className="flex items-center gap-3">
-          <button onClick={() => { clearChat(); seed() }} className="text-xs text-slate-500 hover:text-slate-800">Clear chat</button>
+          <button onClick={() => { announced.current.clear(); clearChat(); seed() }} className="text-xs text-slate-500 hover:text-slate-800">Clear chat</button>
           <ChannelToggle />
         </div>
       </header>

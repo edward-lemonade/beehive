@@ -276,6 +276,7 @@ export async function proposeDraft(
       return null;
     }
     arr.links = priced.links;
+    arr.proposal = priced.proposal ?? null;
 
     for (const slot of arr.slots) {
       const mine = arr.links.filter((l) => l.a === slot.intentId || l.b === slot.intentId);
@@ -505,12 +506,21 @@ async function participantContext(userId: string, arrangementId: string): Promis
 
 const notProposed = (): ArrangementError => new ArrangementError('Arrangement is no longer open for approval', 409);
 
-export function approve(userId: string, arrangementId: string): Promise<void> {
+export function approve(userId: string, arrangementId: string, input: { expectedRevision?: number } = {}): Promise<void> {
   return locked(arrangementId, async () => {
     const { arr, slot } = await participantContext(userId, arrangementId);
     if (arr.state !== 'proposed') throw notProposed();
+    if (input.expectedRevision !== undefined && arr.revision !== input.expectedRevision) {
+      throw new ArrangementError('The proposal changed. Review the current terms before approving', 409);
+    }
     // A standing proposal from the other side is what a yes refers to: accepting it changes the price.
-    if (arr.proposal && arr.proposal.fromIntentId !== slot.intentId) return acceptProposalLocked(arr, slot);
+    if (arr.proposal) {
+      if (arr.proposal.fromIntentId === slot.intentId) {
+        throw new ArrangementError('Your proposal is waiting for the other user to answer', 409);
+      }
+      const link = arr.links.find((entry) => entry.id === arr.proposal!.linkId);
+      if (link && (link.a === slot.intentId || link.b === slot.intentId)) return acceptProposalLocked(arr, slot);
+    }
     await approveSlotLocked(arr, slot);
   });
 }
@@ -555,7 +565,7 @@ async function approveSlotLocked(arr: StoredArrangement, slot: StoredSlot): Prom
   }
 }
 
-// The proposer implicitly approves their own price; the accepter's yes completes it. Nobody is left waiting.
+// A user-named proposal carries their consent; an agent's opening still needs its own user's approval.
 async function acceptProposalLocked(arr: StoredArrangement, accepter: StoredSlot): Promise<void> {
   const proposal = arr.proposal!;
   const link = arr.links.find((l) => l.id === proposal.linkId);
@@ -571,11 +581,21 @@ async function acceptProposalLocked(arr: StoredArrangement, accepter: StoredSlot
   const opened = await assignRequests(arr);
   for (const s of [proposer, accepter]) if (s && (s.approval === 'queued' || s.approval === 'approved')) s.approval = 'requested';
   if (!(await persist(arr))) throw notProposed();
+  events.emit('arrangement.updated', { arrangementId: arr.id });
   await dispatchRequests(arr, opened.filter((s) => s.intentId !== accepter.intentId && s.intentId !== proposal.fromIntentId));
-  if (proposer) await approveSlotLocked(arr, proposer).catch(() => undefined);
+  if (proposer && proposal.source !== 'agent') await approveSlotLocked(arr, proposer);
   const fresh = (await arrangementRepo().get(arr.id)) ?? arr;
   const again = fresh.slots.find((s) => s.intentId === accepter.intentId);
   if (fresh.state === 'proposed' && again) await approveSlotLocked(fresh, again);
+  if (proposal.source === 'agent' && proposer) {
+    const current = await arrangementRepo().get(arr.id);
+    const waiting = current?.slots.find((s) => s.intentId === proposer.intentId);
+    if (current?.state === 'proposed' && waiting?.approval === 'requested') {
+      notify(waiting.userId, 'approval_request', {
+        arrangementId: current.id, revision: current.revision, terms: await viewFor(current, waiting),
+      });
+    }
+  }
 }
 
 export function decline(userId: string, arrangementId: string, opts: { dropDeal?: boolean } = {}): Promise<void> {
@@ -585,7 +605,9 @@ export function decline(userId: string, arrangementId: string, opts: { dropDeal?
     // Saying no to someone's counter-price turns down that price only; the deal at its current price stays.
     if (arr.proposal && arr.proposal.fromIntentId !== slot.intentId && !opts.dropDeal) {
       arr.proposal = null;
+      arr.revision += 1;
       if (!(await persist(arr))) throw notProposed();
+      events.emit('arrangement.updated', { arrangementId: arr.id });
       return;
     }
     if (slot.approval !== 'requested' && slot.approval !== 'queued') throw notProposed();
@@ -659,18 +681,38 @@ export function negotiateFurther(
     const result = await repriceLink(toContract(arr), link.id, { side, ...(input.targetCents !== undefined ? { cents: input.targetCents } : {}) }, `r${arr.revision}`);
     if (result.state === 'pending') {
       // Remember the price on the table so the other user's yes, no or counter has something concrete to answer.
-      arr.proposal = { linkId: link.id, amountCents: result.amountCents, fromIntentId: slot.intentId };
+      arr.proposal = { linkId: link.id, amountCents: result.amountCents, fromIntentId: slot.intentId, source: 'user' };
+      arr.revision += 1;
+      for (const participant of arr.slots) {
+        if ((participant.intentId === link.a || participant.intentId === link.b) && participant.approval === 'approved') {
+          participant.approval = 'queued';
+          participant.termsHash = null;
+          participant.approvedNetCents = null;
+          participant.decidedAt = null;
+          participant.requestedAt = null;
+        }
+      }
+      const opened = await assignRequests(arr);
       if (!(await persist(arr))) throw notProposed();
+      for (const participant of opened) armApprovalTimer(arr.id, participant);
+      events.emit('arrangement.updated', { arrangementId: arr.id });
+      const recipient = arr.slots.find((entry) => entry.intentId === (link.a === slot.intentId ? link.b : link.a));
+      if (recipient) notify(recipient.userId, 'approval_request', {
+        arrangementId: arr.id,
+        revision: arr.revision,
+        terms: await viewFor(arr, recipient),
+      });
       return { status: 'pending', amountCents: result.amountCents };
     }
-    arr.proposal = null;
     if (result.state !== 'agreed') return { status: 'failed', reason: result.reason };
 
+    arr.proposal = null;
     arr.links = arr.links.map((l) => (l.id === link.id ? { ...l, amountCents: result.amountCents, state: 'agreed' as const } : l));
     arr.revision += 1;
     carryApprovals(arr);
     const opened = await assignRequests(arr);
     if (!(await persist(arr))) throw notProposed();
+    events.emit('arrangement.updated', { arrangementId: arr.id });
     await dispatchRequests(arr, opened.filter((s) => s.intentId !== slot.intentId));
     return { status: 'agreed', terms: await viewFor(arr, slot) };
   });

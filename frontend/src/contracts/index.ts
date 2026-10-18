@@ -123,6 +123,12 @@ export const termsViewSchema = z.object({
   grade: z.enum(['exact', 'within_tolerance']),
   otherParticipants: z.number().int().nonnegative(),
   unpriced: z.array(z.object({ otherHandle: z.string(), role: z.enum(['buyer', 'seller']), items: z.array(z.string()) })).optional(),
+  proposal: z.object({
+    amountCents: z.number().int(),
+    otherHandle: z.string(),
+    awaiting: z.enum(['user', 'counterparty']),
+    source: z.enum(['agent', 'user']).optional(),
+  }).optional(),
 });
 
 export const arrangementSchema = z.object({

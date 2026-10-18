@@ -41,9 +41,9 @@ function parseMoney(text: string): { declaredNetCents: number | null; minNetCent
     return { declaredNetCents: null, minNetCents: null };
   }
 
-  const hasExplicitBound = /would take|won't take under|will not take under|at least|minimum|need|take at least/i.test(text);
+  const hasExplicitBound = /would take|won't take under|will not take under|at least|minimum|need|take at least|\bfirm\b|\bnon-negotiable\b|\bnot negotiable\b/i.test(text);
   const declaredNetCents = amounts[0];
-  const minNetCents = hasExplicitBound && amounts.length > 1 ? amounts[1] : declaredNetCents;
+  const minNetCents = hasExplicitBound ? (amounts[1] ?? declaredNetCents) : null;
   return { declaredNetCents, minNetCents };
 }
 

@@ -16,9 +16,10 @@ import { MemoryNoticeRepository } from '../src/discovery/notices.js';
 import { refreshEdges, resetNearMissDeliveries, setNoticeRepository } from '../src/discovery/service.js';
 import { events } from '../src/events.js';
 import type { IntentRepository, StoredIntent } from '../src/intents/repository.js';
-import { setIntentRepository } from '../src/intents/service.js';
+import { setIntentParser, setIntentRepository } from '../src/intents/service.js';
+import { parseIntentText } from '../src/intents/parse.js';
 import app from '../src/index.js';
-import { MemoryNegotiationLogRepository, setNegotiationLogRepository } from '../src/negotiation/log.js';
+import { MemoryNegotiationLogRepository, negotiationLog, setNegotiationLogRepository } from '../src/negotiation/log.js';
 import { installNegotiation, resetSessions } from '../src/negotiation/session.js';
 import { setWordingProvider, templateWording } from '../src/negotiation/wording.js';
 import { bus } from '../src/runtime/bus.js';
@@ -26,6 +27,8 @@ import { buildGuardContext } from '../src/runtime/guard-context.js';
 import { resetHooks } from '../src/runtime/hooks.js';
 import { ensureAgent, scheduler, startRuntime, stopRuntime } from '../src/runtime/registry.js';
 import { MemorySignalRepository, setSignalRepository } from '../src/runtime/signals.js';
+import { SEED_SCENARIOS, SEED_USERS, postScenario, seedOptions } from '../src/seed/scenario.js';
+import { runAgentChat, setChatCompleter } from '../src/agent/chat.js';
 
 const ticket = (label: string): Item => ({ kind: 'ticket', label, attrs: {}, qty: 1 });
 const cash = (amountCents: number): Item => ({ kind: 'cash', label: 'cash', attrs: {}, qty: 1, amountCents });
@@ -120,11 +123,154 @@ afterEach(() => {
   setArrangementRepository();
   setContactLookup();
   setIntentRepository();
+  setIntentParser();
+  setChatCompleter();
   setSignalRepository();
   setNoticeRepository();
 });
 
 describe('end to end', () => {
+  it('does not turn an agent-originated opening into consent from its user', async () => {
+    const money: Item = { kind: 'cash', label: 'cash', attrs: {}, qty: 1 };
+    add('buyer', [money], [[ticket('concert')]], null);
+    add('seller', [ticket('concert')], [[cash(11000)]], null);
+    add('firm', [ticket('concert')], [[{ ...cash(10000), flex: 'firm' }]], 10000);
+    await start('buyer', 'seller', 'firm');
+    await waitFor(() => byState('proposed').length === 2);
+    const arr = byState('proposed').find((entry) => entry.slots.some((slot) => slot.intentId === 'seller'))!;
+    expect(arr.proposal).toMatchObject({ fromIntentId: 'buyer', amountCents: 9000, source: 'agent' });
+    await service.approve('useller', arr.id);
+    const accepted = arrs.rows.get(arr.id)!;
+    expect(accepted.state).toBe('proposed');
+    expect(accepted.proposal).toBeNull();
+    expect(accepted.slots.find((slot) => slot.intentId === 'seller')!.approval).toBe('approved');
+    expect(accepted.slots.find((slot) => slot.intentId === 'buyer')!.approval).toBe('requested');
+    await service.approve('ubuyer', arr.id);
+    expect(arrs.rows.get(arr.id)!.state).toBe('committed');
+  });
+
+  it('loads the shopping seed and proposes $90 with dawg while preserving the $100 firm option', async () => {
+    expect(seedOptions().map((scenario) => scenario.id)).toEqual(['ticket-swap', 'ticket-shopping']);
+    expect(SEED_SCENARIOS[0].users).toBe(SEED_USERS);
+    const scenario = SEED_SCENARIOS[1];
+    setIntentParser(async (text) => parseIntentText(text));
+    await postScenario(scenario.users.map((user) => ({ id: `u-${user.handle}`, handle: user.handle, tier: 'new' })), scenario.id);
+    const intents = [...repo.intents.values()];
+    const buyer = intents.find((intent) => intent.public.ownerHandle === 'edward')!;
+    const firm = intents.find((intent) => intent.public.ownerHandle === 'acmm')!;
+    const negotiable = intents.find((intent) => intent.public.ownerHandle === 'dawg')!;
+    expect(buyer.private.minNetCents).toBeNull();
+    expect(firm.private.minNetCents).toBe(10000);
+    expect(negotiable.private.minNetCents).toBeNull();
+    await start(...intents.map((intent) => intent.id));
+    await waitFor(() => byState('proposed').length === 2);
+    await coordinator.idle();
+    const offers = await negotiationLog().forIntents([buyer.id], 100);
+    expect(offers.find((entry) => entry.kind === 'offer' && entry.to === negotiable.id)).toMatchObject({
+      from: buyer.id, amountCents: 9000,
+    });
+    const mine = await service.listMine(buyer.ownerId);
+    expect(mine.flatMap((entry) => entry.terms.cashOut)).toEqual(expect.arrayContaining([
+      { toHandle: 'acmm', amountCents: 10000 },
+      { toHandle: 'dawg', amountCents: 9000 },
+    ]));
+    expect(byState('committed')).toHaveLength(0);
+
+    const shoppingDeal = mine.find((entry) => entry.terms.cashOut.some((cash) => cash.toHandle === 'dawg'))!;
+    expect(shoppingDeal.terms.proposal).toMatchObject({
+      amountCents: 9000, otherHandle: 'dawg', awaiting: 'counterparty', source: 'agent',
+    });
+    const openingForSeller = (await service.listMine(negotiable.ownerId)).find((entry) => entry.terms.arrangementId === shoppingDeal.terms.arrangementId)!;
+    expect(openingForSeller.terms.proposal).toMatchObject({
+      amountCents: 9000, otherHandle: 'edward', awaiting: 'user', source: 'agent',
+    });
+    await expect(service.approve(buyer.ownerId, shoppingDeal.terms.arrangementId)).rejects.toThrow(/waiting for the other user/);
+    let openingCalls = 0;
+    setChatCompleter(async (messages) => {
+      openingCalls++;
+      expect(messages[0]!.content).toContain("edward's agent offered $90");
+      expect(messages[0]!.content).toContain('waiting on the USER');
+      return JSON.stringify({ reply: 'model-output-opening', action: null });
+    });
+    const openingNotice = await runAgentChat({
+      user: { id: negotiable.ownerId, handle: 'dawg', tier: 'new' },
+      event: { kind: 'approval_request', arrangementId: shoppingDeal.terms.arrangementId }, history: [],
+    });
+    expect(openingCalls).toBe(1);
+    expect(openingNotice.reply).toBe('model-output-opening');
+    const updates: number[] = [];
+    const onUpdate = ({ arrangementId }: { arrangementId: string }) => {
+      if (arrangementId === shoppingDeal.terms.arrangementId) {
+        updates.push(arrs.rows.get(arrangementId)!.proposal!.amountCents);
+      }
+    };
+    events.on('arrangement.updated', onUpdate);
+    try {
+      let step = 0;
+      setChatCompleter(async (messages) => {
+        if (step++ === 0) return JSON.stringify({
+          reply: '', action: { type: 'negotiate_arrangement', arrangementId: shoppingDeal.terms.arrangementId, targetCents: 10000 },
+        });
+        expect(messages[0]!.content).toContain('receive $100 from edward');
+        expect(messages[0]!.content).not.toContain('receive $90 from edward');
+        expect(messages[0]!.content).toContain('waiting for their answer');
+        return JSON.stringify({ reply: 'model-output-counter', action: null });
+      });
+      const counter = await runAgentChat({
+        user: { id: negotiable.ownerId, handle: 'dawg', tier: 'new' },
+        message: "No. I'll do $100 max", history: [],
+      });
+      expect(counter.changed).toBe(true);
+      expect(updates).toEqual([10000]);
+    } finally {
+      events.off('arrangement.updated', onUpdate);
+    }
+    const buyerTerms = (await service.listMine(buyer.ownerId)).find((entry) => entry.terms.arrangementId === shoppingDeal.terms.arrangementId)!.terms;
+    const sellerTerms = (await service.listMine(negotiable.ownerId)).find((entry) => entry.terms.arrangementId === shoppingDeal.terms.arrangementId)!.terms;
+    expect(buyerTerms).toMatchObject({
+      cashOut: [{ toHandle: 'dawg', amountCents: 10000 }],
+      netCents: -10000,
+      approval: 'requested',
+      proposal: { amountCents: 10000, otherHandle: 'dawg', awaiting: 'user' },
+    });
+    expect(sellerTerms).toMatchObject({
+      cashIn: [{ fromHandle: 'edward', amountCents: 10000 }],
+      proposal: { amountCents: 10000, otherHandle: 'edward', awaiting: 'counterparty' },
+    });
+    expect(buyerTerms.revision).toBeGreaterThan(shoppingDeal.terms.revision);
+
+    // Check the model's factual inputs and that its output is used, not an injected scenario response.
+    let noticeCalls = 0;
+    setChatCompleter(async (messages) => {
+      noticeCalls++;
+      expect(messages[0]!.content).toContain(noticeCalls === 1 ? 'dawg proposed $100' : 'You proposed $100 to edward');
+      expect(messages[0]!.content).not.toContain('receive $90 from edward');
+      expect(messages[0]!.content).not.toContain('pay $90 to dawg');
+      expect(messages[messages.length - 1]!.content).not.toContain('9000');
+      return JSON.stringify({ reply: `model-output-notice-${noticeCalls}`, action: null });
+    });
+    const event = { kind: 'approval_request', arrangementId: shoppingDeal.terms.arrangementId, amountCents: 9000 };
+    const buyerNotice = await runAgentChat({
+      user: { id: buyer.ownerId, handle: 'edward', tier: 'new' }, event,
+      history: [{ from: 'agent', text: "Dawg's price is $90. Should we go with that?" }],
+    });
+    expect(buyerNotice.reply).toBe('model-output-notice-1');
+    const sellerNotice = await runAgentChat({
+      user: { id: negotiable.ownerId, handle: 'dawg', tier: 'new' }, event, history: [],
+    });
+    expect(sellerNotice.reply).toBe('model-output-notice-2');
+    expect(noticeCalls).toBe(2);
+    await expect(service.approve(negotiable.ownerId, shoppingDeal.terms.arrangementId)).rejects.toThrow(/waiting for the other user/);
+    await expect(service.approve(buyer.ownerId, shoppingDeal.terms.arrangementId, {
+      expectedRevision: shoppingDeal.terms.revision,
+    })).rejects.toThrow(/proposal changed/);
+    await service.approve(buyer.ownerId, shoppingDeal.terms.arrangementId);
+    const final = (await service.listMine(buyer.ownerId)).find((entry) => entry.terms.arrangementId === shoppingDeal.terms.arrangementId)!.terms;
+    expect(final.state).toBe('committed');
+    expect(final.cashOut).toEqual([{ toHandle: 'dawg', amountCents: 10000 }]);
+    expect(final.proposal).toBeUndefined();
+  });
+
   it('S1: proposes once, commits once, and releases contacts per counterparty pair only', async () => {
     chain();
     await start('alice', 'bob', 'carol');

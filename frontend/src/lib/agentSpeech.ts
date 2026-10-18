@@ -62,6 +62,7 @@ export const retracted = (): string => "I've retracted your approval."
 export const negotiating = (handle?: string): string => `Asking ${handle ?? 'their agent'} now…`
 
 export function messageOutcome(status: string, cents: number | undefined): string {
+  if (status === 'pending') return `The ${cents !== undefined ? `${money(cents)} offer` : 'offer'} still needs a user's decision. It has not been accepted yet.`
   if (status === 'agreed' && cents !== undefined) return `They agreed to ${money(cents)}. I've set it up for your approval.`
   if (status === 'agreed') return "They agreed. I've set it up for your approval."
   if (status === 'awaiting_user') return 'They need to check with their user first. I will tell you what they say.'

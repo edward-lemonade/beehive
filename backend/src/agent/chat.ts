@@ -111,7 +111,16 @@ type Ctx = { own: Array<{ id: string; state: string; text: string; limit: number
 // With several priced or unpriced cash lines there is no single "the price", so shortcuts keyed on it must not fire.
 function singlePrice(t: TermsView | undefined): number | undefined {
   if (!t || (t.unpriced?.length ?? 0) > 0 || t.cashOut.length + t.cashIn.length !== 1) return undefined;
+  if (t.proposal) return t.proposal.amountCents;
   return t.cashOut[0]?.amountCents ?? t.cashIn[0]?.amountCents;
+}
+
+function proposalLine(t: TermsView): string {
+  const proposal = t.proposal;
+  if (!proposal) return '';
+  return proposal.awaiting === 'counterparty'
+    ? `${proposal.source === 'agent' ? "The user's agent offered" : 'You proposed'} ${money(proposal.amountCents)} to ${proposal.otherHandle} and are waiting for their answer. Nothing for the user to approve on this proposal.`
+    : `${proposal.otherHandle}${proposal.source === 'agent' ? "'s agent offered" : ' proposed'} ${money(proposal.amountCents)}. It is waiting on the USER to accept, decline, or counter.`;
 }
 
 function termsLine(t: TermsView): string {
@@ -135,7 +144,7 @@ function termsLine(t: TermsView): string {
     queued: 'not yet put to the user',
     retracted: 'the user retracted approval',
   };
-  return `id=${t.arrangementId} status=${t.state}/${t.approval} (${meaning[t.approval] ?? t.approval}): ${parts.join('; ') || 'no terms'}`;
+  return `id=${t.arrangementId} revision=${t.revision} status=${t.state}/${t.approval} (${t.proposal ? proposalLine(t) : meaning[t.approval] ?? t.approval}): ${parts.join('; ') || 'no terms'}. ${t.state === 'proposed' ? 'Proposed terms only; not evidence that the other side accepted.' : ''}`;
 }
 
 // Approval state limited to the people the user actually deals with. Other parties in a multi-party arrangement are never named to them.
@@ -174,7 +183,7 @@ async function buildContext(userId: string): Promise<Ctx> {
   const conversation = entries.filter((e) => e.kind !== 'say' || e.text).map((e) => {
     const who = (id: string): string => (mineIds.has(id) ? 'the user\'s agent' : `${handles.get(id) ?? 'the other agent'}'s agent`);
     const what = e.kind === 'offer' ? `offered ${money(e.amountCents ?? 0)}` : e.kind === 'accept' ? `accepted ${money(e.amountCents ?? 0)}` : e.kind === 'walk' ? 'walked away' : `said "${e.text}"`;
-    return `${who(e.from)} ${what}`;
+    return `${who(e.from)} ${what} to ${who(e.to)}${e.arrangementId ? ` [arrangement=${e.arrangementId}]` : ''}`;
   });
   return {
     conversation,
@@ -183,15 +192,9 @@ async function buildContext(userId: string): Promise<Ctx> {
     arrangements: await Promise.all(live.map(async (a) => {
       const t = a.terms;
       const stored = await arrangementRepo().get(t.arrangementId);
-      const proposal = stored?.proposal;
       const status = stored ? approvalLine(stored.slots, stored.links, userId, handles) : '';
-      if (!proposal || !stored) return `${termsLine(t)}${status}`;
-      const mineSlot = stored.slots.find((s) => s.userId === userId);
-      const handle = t.cashOut[0]?.toHandle ?? t.cashIn[0]?.fromHandle ?? 'the other user';
-      const note = proposal.fromIntentId === mineSlot?.intentId
-        ? `OPEN PROPOSAL: you asked ${handle} for ${money(proposal.amountCents)} and are waiting for their answer. Nothing for the user to decide.`
-        : `OPEN PROPOSAL: ${handle} proposed ${money(proposal.amountCents)} instead and it is waiting on the USER. A yes accepts it, a no turns that price down and keeps the current one, another price counters it.`;
-      return `${termsLine(t)} ${note}${status}`;
+      if (t.proposal) return `${termsLine(t)} CURRENT STATUS (authoritative): ${proposalLine(t)}`;
+      return `${termsLine(t)}${status}`;
     })),
     arrangementIds: new Set(live.map((a) => a.terms.arrangementId)),
   };
@@ -253,16 +256,23 @@ async function runAgentChatTurn(input: AgentChatInput): Promise<AgentChatResult>
   let changed = false;
 
   const userInjection = input.message ? reportInjection({ surface: 'chat', text: input.message, userId: user.id }).suspected : false;
-  const ctx = await buildContext(user.id);
+  let ctx = await buildContext(user.id);
   const flaggedListingsInContext = ctx.others.filter((o) => scanForInjection(o.text).suspected).length;
   const messages: LlmMessage[] = [{ role: 'system', content: `${SYSTEM}\n${canaryInstruction}\n\n${renderContext(ctx)}` }];
   for (const turn of input.history.slice(-16)) {
     messages.push({ role: turn.from === 'me' ? 'user' : 'assistant', content: turn.from === 'me' ? turn.text : JSON.stringify({ reply: turn.text, action: null }) });
   }
-  messages.push({ role: 'user', content: input.event ? `EVENT: ${JSON.stringify(input.event)}` : (input.message ?? '') });
+  // Approval events identify which live arrangement to discuss; their cached prices are not facts.
+  const event = input.event?.kind === 'approval_request' ? {
+    kind: input.event.kind,
+    arrangementId: input.event.arrangementId,
+    instruction: 'Describe this arrangement using its CURRENT STATUS and proposal in CONTEXT. Identify whose agent made the offer and who must answer. Do not treat an opening offer as the seller accepting. If it is no longer in CONTEXT, say it is no longer available.',
+  } : input.event;
+  messages.push({ role: 'user', content: event ? `EVENT: ${JSON.stringify(event)}` : (input.message ?? '') });
 
   async function execute(action: Action): Promise<string> {
     try {
+      if (event?.kind === 'approval_request') return 'Approvals can only follow a message from the user. This is a notification, not a user decision. Describe the current proposal in CONTEXT without taking an action.';
       switch (action.type) {
         case 'message_agent': {
           const result = await negotiateDirect(user.id, { ownIntentId: action.ownIntentId, targetIntentId: action.targetIntentId, ...(typeof action.targetCents === 'number' ? { targetCents: action.targetCents } : {}) });
@@ -275,6 +285,7 @@ async function runAgentChatTurn(input: AgentChatInput): Promise<AgentChatResult>
             case 'no_price_named': return 'Nobody has named a price yet, so nothing was sent to them (no offer was made). Do NOT say you reached out, offered or are waiting. Do NOT say a match is being set up or that anyone will be asked for a price; nothing was set up. Just say nothing has been started.';
             case 'no_price_needed': return 'No cash is involved, so there is no price to negotiate and nothing was sent to them. Do NOT say you reached out or are waiting on them; say the match is being worked out automatically.';
             case 'needs_bound_change': return "That price is outside what the user's own limits allow. Ask them if they want to change their limit.";
+            case 'pending': return `An offer of ${money(result.amountCents)} was sent, but it has NOT been accepted. One side's user still needs to decide. Never describe this as an agreed price.`;
             default: return `Result: ${JSON.stringify(result)}. Amounts are in cents. Report only what this result says; a stored price is not an offer unless the result says one was sent to that person.`;
           }
         }
@@ -283,8 +294,8 @@ async function runAgentChatTurn(input: AgentChatInput): Promise<AgentChatResult>
           const current = (await listMineArrangements(user.id)).find((a) => a.terms.arrangementId === action.arrangementId);
           const currentCents = singlePrice(current?.terms);
           // Naming the price that is already on the table is a yes to it, not a new negotiation.
-          if (input.message && current?.terms.approval === 'requested' && typeof action.targetCents === 'number' && action.targetCents === currentCents) {
-            await approve(user.id, action.arrangementId);
+          if (input.message && current?.terms.approval === 'requested' && current.terms.proposal?.awaiting !== 'counterparty' && typeof action.targetCents === 'number' && action.targetCents === currentCents) {
+            await approve(user.id, action.arrangementId, { expectedRevision: current.terms.revision });
             changed = true;
             const after = (await listMineArrangements(user.id)).find((a) => a.terms.arrangementId === action.arrangementId);
             return after?.terms.state === 'committed'
@@ -293,7 +304,7 @@ async function runAgentChatTurn(input: AgentChatInput): Promise<AgentChatResult>
           }
           const result = await negotiateFurther(user.id, action.arrangementId, typeof action.targetCents === 'number' ? { targetCents: action.targetCents } : {});
           changed = true;
-          if (result.status === 'pending') return `The other side's agent could not decide alone and is asking its own user whether ${money(result.amountCents)} works. Nothing is agreed and the price on the card has NOT changed. Tell the user you asked and are waiting for an answer. Do not say they lowered, raised, agreed, refused or held firm.`;
+          if (result.status === 'pending') return `You proposed ${money(result.amountCents)} to the other side and are waiting for their answer. Nothing is agreed. The active proposal is now ${money(result.amountCents)}, replacing any earlier offer. Do not say the other side lowered, raised, agreed, refused or held firm.`;
           if (result.status === 'failed') {
             return result.reason === 'no_overlap' || result.reason === 'no_agreement'
               ? `The other side's agent declined to move to that price. The current price stands.`
@@ -307,16 +318,21 @@ async function runAgentChatTurn(input: AgentChatInput): Promise<AgentChatResult>
         case 'retract_approval': {
           if (!input.message) return 'Approvals can only follow a message from the user.';
           if (!ctx.arrangementIds.has(action.arrangementId)) return 'No such pending arrangement.';
+          let approvalRevision: number | undefined;
           if (action.type === 'approve_arrangement') {
             const current = (await listMineArrangements(user.id)).find((a) => a.terms.arrangementId === action.arrangementId)?.terms;
+            approvalRevision = current?.revision;
+            if (current?.proposal?.awaiting === 'counterparty') {
+              return `Not approved. Your proposal of ${money(current.proposal.amountCents)} is waiting for ${current.proposal.otherHandle} to answer, not for the user's approval.`;
+            }
             const price = singlePrice(current);
             if (price !== undefined && action.amountCents !== price) {
               return `Not approved. The price on the table is ${money(price)}, and approval must name exactly the price the user agreed to. Ask the user if ${money(price)} is OK, or negotiate a different price.`;
             }
           }
-          const run = action.type === 'approve_arrangement' ? approve : retract;
           if (action.type === 'decline_arrangement') await decline(user.id, action.arrangementId, { dropDeal: action.dropDeal === true });
-          else await run(user.id, action.arrangementId);
+          else if (action.type === 'approve_arrangement') await approve(user.id, action.arrangementId, { expectedRevision: approvalRevision });
+          else await retract(user.id, action.arrangementId);
           changed = true;
           const after = (await listMineArrangements(user.id)).find((a) => a.terms.arrangementId === action.arrangementId);
           const priceNow = after ? termsLine(after.terms) : '';
@@ -408,6 +424,8 @@ async function runAgentChatTurn(input: AgentChatInput): Promise<AgentChatResult>
     actions.push(out.action.type);
     const result = await executeTool(out.action);
     toolOutcomes.push(toolOutcome(result));
+    ctx = await buildContext(user.id);
+    messages[0] = { role: 'system', content: `${SYSTEM}\n${canaryInstruction}\n\n${renderContext(ctx)}` };
     messages.push({ role: 'assistant', content: raw }, { role: 'user', content: `TOOL RESULT: ${result}` });
   }
   if (!reply) throw new Error('Agent produced no reply');

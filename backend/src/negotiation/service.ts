@@ -3,7 +3,7 @@ import type { Link } from '../contracts/index.js';
 import type { StoredIntent } from '../intents/repository.js';
 import { getIntentRepository } from '../intents/service.js';
 import { ensureAgent } from '../runtime/registry.js';
-import { termsFor } from './arrangement.js';
+import { competitiveOpening, termsFor } from './arrangement.js';
 import { deriveLinkBounds, linkBounds, withinBounds, type LinkTerms } from './pricing.js';
 import { runSession } from './session.js';
 
@@ -12,6 +12,7 @@ export type DirectResult =
   | { status: 'no_price_needed' | 'no_price_named' }
   | { status: 'needs_bound_change' }
   | { status: 'agreed'; amountCents: number; rounds: number }
+  | { status: 'pending'; amountCents: number; rounds: number }
   | { status: 'failed'; rounds: number };
 
 const party = (i: StoredIntent) => ({
@@ -38,8 +39,12 @@ function pairPayer(own: StoredIntent, target: StoredIntent, ownGives: boolean, o
 async function neighborTerms(intent: StoredIntent, excludeId: string): Promise<LinkTerms[]> {
   const repo = getIntentRepository();
   const out: LinkTerms[] = [];
-  for (const edge of await getEdges(intent.id)) {
+  const edges = await getEdges(intent.id);
+  const targetSlots = new Set(edges.find((edge) => edge.other === excludeId)?.selfWants.map((want) => want.slot));
+  for (const edge of edges) {
     if (edge.other === excludeId) continue;
+    // Competing sellers for the same wanted slot are alternatives, not additional purchases.
+    if (edge.selfGives.length === 0 && edge.selfWants.length > 0 && edge.selfWants.every((want) => targetSlots.has(want.slot))) continue;
     const other = await repo.get(edge.other);
     if (!other) continue;
     const payerId = pairPayer(intent, other, edge.selfGives.length > 0, edge.selfWants.some((w) => w.provider === other.id));
@@ -93,7 +98,10 @@ export async function negotiateDirect(
     if (!ok) return { status: 'needs_bound_change' };
   }
   const bounds = linkBounds(terms, payerBounds, receiverBounds, ownIsPayer
-    ? { payerOpenCents: input.targetCents }
+    ? {
+      payerOpenCents: input.targetCents,
+      competitiveOpenCents: input.targetCents === undefined ? await competitiveOpening(payer, receiver, terms) : undefined,
+    }
     : { receiverAskCents: input.targetCents });
 
   ensureAgent(own.id);
@@ -105,6 +113,6 @@ export async function negotiateDirect(
     bounds,
   });
   return result.state === 'agreed' && result.amountCents !== undefined
-    ? { status: 'agreed', amountCents: result.amountCents, rounds: result.rounds }
+    ? { status: result.pendingUser ? 'pending' : 'agreed', amountCents: result.amountCents, rounds: result.rounds }
     : { status: 'failed', rounds: result.rounds };
 }

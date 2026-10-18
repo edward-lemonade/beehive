@@ -1,7 +1,9 @@
 import { negotiationLog } from './log.js';
+import { refreshEdges } from '../discovery/service.js';
 import type { IntentPublic, Link, Slot } from '../contracts/index.js';
 import { events } from '../events.js';
 import type { StoredIntent } from '../intents/repository.js';
+import type { PriceProposal } from '../arrangements/types.js';
 import { getIntentRepository } from '../intents/service.js';
 import { ensureAgent } from '../runtime/registry.js';
 import {
@@ -21,6 +23,7 @@ export type PricingResult = {
   failedLinkId?: string;
   reason?: string;
   gapCents?: number;
+  proposal?: PriceProposal;
 };
 
 const cashGiven = (i: IntentPublic): number =>
@@ -53,6 +56,37 @@ const partyOf = (intent: StoredIntent): Party => ({
   declaredNetCents: intent.private.declaredNetCents,
 });
 
+// A comparable firm listing is a public benchmark, not permission to buy or a private spending limit.
+export async function competitiveOpening(payer: StoredIntent, receiver: StoredIntent, target: LinkTerms): Promise<number | undefined> {
+  if (target.payCents !== null || target.payerFirm || target.receiverFirm || !target.askCents) return undefined;
+  if (payer.public.give.some((item) => item.kind !== 'cash')
+    || payer.public.want.filter((slot) => slot.anyOf.some((item) => item.kind !== 'cash')).length !== 1
+    || receiver.public.give.filter((item) => item.kind !== 'cash').length !== 1
+    || receiver.public.want.some((slot) => slot.anyOf.some((item) => item.kind !== 'cash'))) return undefined;
+
+  const edges = await refreshEdges(payer.id);
+  const requested = edges.find((edge) => edge.other === receiver.id)?.selfWants;
+  if (requested?.length !== 1) return undefined;
+  let cheapest = target.askCents;
+  const repo = getIntentRepository();
+  for (const edge of edges) {
+    if (edge.other === receiver.id || edge.selfWants.length !== 1
+      || edge.selfWants[0]!.slot !== requested[0]!.slot
+      || edge.selfWants[0]!.item.qty !== requested[0]!.item.qty) continue;
+    const other = await repo.get(edge.other);
+    if (!other || other.state !== 'open'
+      || other.public.give.filter((item) => item.kind !== 'cash').length !== 1
+      || other.public.want.length !== 1 || other.public.want[0]!.anyOf.length !== 1) continue;
+    const price = other.public.want[0]!.anyOf[0]!;
+    if (price.kind === 'cash' && price.flex === 'firm' && price.amountCents && price.amountCents > 0) {
+      cheapest = Math.min(cheapest, price.amountCents * price.qty);
+    }
+  }
+  if (cheapest >= target.askCents) return undefined;
+  const opening = Math.floor(cheapest * 0.9);
+  return opening > 0 ? opening : undefined;
+}
+
 export async function priceArrangement(arrangement: { id: string; slots: Slot[]; links: Link[] }): Promise<PricingResult> {
   const repo = getIntentRepository();
   const intents = new Map<string, StoredIntent>();
@@ -77,6 +111,7 @@ export async function priceArrangement(arrangement: { id: string; slots: Slot[];
   }
 
   const priced = new Map<string, number>();
+  let proposal: PriceProposal | undefined;
   let remaining = terms;
   while (remaining.length > 0) {
     const target = pricingOrder(remaining)[0]!;
@@ -91,7 +126,9 @@ export async function priceArrangement(arrangement: { id: string; slots: Slot[];
       remaining = remaining.filter((t) => t !== target);
       continue;
     }
-    const bounds = linkBounds(target, payerBounds, receiverBounds);
+    const bounds = linkBounds(target, payerBounds, receiverBounds, {
+      competitiveOpenCents: await competitiveOpening(payer, receiver, target),
+    });
     ensureAgent(payer.id);
     ensureAgent(receiver.id);
 
@@ -127,12 +164,20 @@ export async function priceArrangement(arrangement: { id: string; slots: Slot[];
     }
     target.link.state = 'agreed';
     target.link.amountCents = result.amountCents;
+    if (terms.length === 1 && result.pendingUser && result.pendingSide) {
+      proposal = {
+        linkId: target.link.id,
+        amountCents: result.amountCents,
+        fromIntentId: result.pendingSide === 'receiver' ? payer.id : receiver.id,
+        source: 'agent',
+      };
+    }
     priced.set(target.link.id, result.amountCents);
     remaining = remaining.filter((t) => t !== target);
   }
 
   events.emit('arrangement.priced', { arrangementId: arrangement.id });
-  return { state: 'agreed', links };
+  return { state: 'agreed', links, ...(proposal ? { proposal } : {}) };
 }
 
 export type RepriceResult = { state: 'agreed'; amountCents: number } | { state: 'pending'; amountCents: number } | { state: 'failed'; reason: string };
@@ -190,7 +235,7 @@ export async function repriceLink(
     return { state: 'failed', reason: 'no_price_named' };
   }
   const bounds = linkBounds(target, payerBounds, receiverBounds, anchor.cents === undefined
-    ? {}
+    ? { competitiveOpenCents: await competitiveOpening(payer, receiver, target) }
     : anchor.side === 'payer' ? { payerOpenCents: anchor.cents } : { receiverAskCents: anchor.cents });
   ensureAgent(payer.id);
   ensureAgent(receiver.id);

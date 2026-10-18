@@ -67,3 +67,39 @@ No new routes. Small additions only if a gap shows up (for example the intent te
 ## LLM-backed chat (supersedes template replies)
 
 Free text in the chat goes to `POST /agent/chat` (`backend/src/agent/chat.ts`). The agent sees the user's intents, other users' open listings and pending arrangements, then replies in its own words. It may request one action per step: `message_agent`, `negotiate_arrangement`, `approve_arrangement`, `decline_arrangement`, `retract_approval`, `keep_looking`. The server executes it (ownership enforced by the services) and feeds back a `TOOL RESULT` for up to 4 steps. Approval actions run only when the request carries a user message, never for an `event`. The agent cannot create intents; the New intent box does that. System events can be passed as `event` so the agent narrates them.
+
+### Authoritative proposal updates
+
+Price/approval notifications also go through the chat model. There is no
+scenario-specific reply or fixed price-notification template. The backend
+supplies current persisted terms and offer provenance to the model, and removes
+cached amounts from approval events. Old event amounts and chat messages are not
+sources of truth. A buyer's $90 opening must never be described as the seller's
+accepted price.
+
+`TermsView.proposal`, when present, contains the active `amountCents`,
+`otherHandle`, `awaiting` (`user` or `counterparty`), and, for new proposals,
+`source` (`agent` or `user`). Cash and net amounts in
+that view reflect the active proposal, not the superseded price stored on the
+link. The proposal is not an agreement. A $100 counter from dawg therefore shows
+$100 to both sides: edward is asked to answer, while dawg is told to wait.
+Initial single-link negotiations that stop for a user's decision also persist
+the proposal: the $90 opening is attributed to edward's agent, with dawg answering.
+Accepting an agent-originated opening does not auto-approve the originating user;
+only a user-named proposal carries that user's consent.
+
+Creating, replacing, accepting, or rejecting a proposal increments the revision
+and publishes `arrangement.updated` after persistence. Changed proposals clear
+the affected users' previous approvals. Notifications use revision-based keys,
+ignore superseded in-flight responses, and surface request errors instead of
+substituting a generic success message. In-flight negotiation events for
+arrangements do not announce prices before persistence.
+
+Every executed chat tool refreshes the model's authoritative context before the
+next model step. Approval tools check the current proposal amount and pass the
+same revision into the serialized approval operation, so a concurrent counter
+cannot turn approval of an old price into approval of a new one.
+
+Backend unit checks stub the model to verify its factual inputs and that its
+returned text is used unchanged; they do not validate live-model wording.
+Seed definitions contain listings, not agent responses.

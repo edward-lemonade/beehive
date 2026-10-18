@@ -58,8 +58,21 @@ export function termsView(
   const cashIn: TermsView['cashIn'] = [];
   const counterparties = new Set<string>();
   const unpriced: NonNullable<TermsView['unpriced']> = [];
+  const proposedLink = arr.state === 'proposed' && arr.proposal
+    ? arr.links.find((link) => link.id === arr.proposal!.linkId && (link.a === me || link.b === me))
+    : undefined;
+  const proposal = proposedLink && arr.proposal ? {
+    amountCents: arr.proposal.amountCents,
+    otherHandle: handleOf(arr, intents, proposedLink.a === me ? proposedLink.b : proposedLink.a),
+    awaiting: arr.proposal.fromIntentId === me ? 'counterparty' as const : 'user' as const,
+    ...(arr.proposal.source ? { source: arr.proposal.source } : {}),
+  } : undefined;
+  const visible = proposal ? {
+    ...arr,
+    links: arr.links.map((link) => link.id === proposedLink!.id ? { ...link, amountCents: proposal.amountCents } : link),
+  } : arr;
 
-  for (const link of arr.links) {
+  for (const link of visible.links) {
     if (link.a !== me && link.b !== me) continue;
     const other = link.a === me ? link.b : link.a;
     counterparties.add(other);
@@ -81,7 +94,7 @@ export function termsView(
   }
 
   const intent = intents.get(me)!;
-  const net = netFor(arr, me);
+  const net = netFor(visible, me);
   const participants = arr.slots.filter((s) => s.approval !== 'void').length;
   return {
     arrangementId: arr.id,
@@ -100,5 +113,6 @@ export function termsView(
     grade: gradeOf(net, intent),
     otherParticipants: Math.max(0, participants - 1 - counterparties.size),
     ...(unpriced.length > 0 ? { unpriced } : {}),
+    ...(proposal ? { proposal } : {}),
   };
 }

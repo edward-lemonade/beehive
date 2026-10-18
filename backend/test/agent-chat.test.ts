@@ -114,7 +114,7 @@ describe('agent chat', () => {
     ];
     setChatCompleter(async () => yes.shift()!);
     await runAgentChat({ user, message: 'sure', history: [] });
-    expect(approve).toHaveBeenCalledWith('u1', 'arr-1');
+    expect(approve).toHaveBeenCalledWith('u1', 'arr-1', { expectedRevision: undefined });
 
     approve.mockClear();
     const ev = [

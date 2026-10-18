@@ -6,6 +6,18 @@ afterEach(() => {
 });
 
 describe('structured intent parser', () => {
+  it('keeps a negotiable ask separate from a firm minimum in the fallback parser', () => {
+    expect(parseIntentText("I'm selling a ticket for $110, negotiable.")).toMatchObject({
+      minNetCents: null,
+      declaredNetCents: 11000,
+    });
+    expect(parseIntentText("I'm selling a ticket for $100, non-negotiable.")).toMatchObject({
+      minNetCents: 10000,
+      declaredNetCents: 10000,
+      want: [{ anyOf: [{ amountCents: 10000, flex: 'firm' }] }],
+    });
+  });
+
   it('sends only the supplied user text and validates the structured model output', async () => {
     const text = 'selling my Friday Coachella ticket, want $300 but would take $270';
     const parsed = parseIntentText(text);

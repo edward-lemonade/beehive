@@ -32,6 +32,9 @@ export type AgentChatResult = { reply: string; draft: Draft | null; changed: boo
 
 export type StoredChat = { from: 'agent' | 'me'; text: string; key?: string; arrangementId?: string; suggest?: { arrangementId: string; cents: number }; at: number }
 
+const seedOptionSchema = z.object({ id: z.string(), label: z.string(), description: z.string() })
+export type SeedOption = z.infer<typeof seedOptionSchema>
+
 export type Api = {
   chatMessages(): Promise<StoredChat[]>
   saveChatMessage(message: Omit<StoredChat, 'at'>): Promise<void>
@@ -40,7 +43,8 @@ export type Api = {
   myIntents(): Promise<MyIntent[]>
   createDraft(text: string): Promise<Draft>
   agentChat(input: AgentChatInput): Promise<AgentChatResult>
-  loadSeed(): Promise<void>
+  seedOptions(): Promise<SeedOption[]>
+  loadSeed(scenarioId?: string): Promise<void>
   answerDraft(id: string, text: string): Promise<Draft>
   confirmDraft(id: string): Promise<void>
   editIntent(id: string, text: string): Promise<void>
@@ -110,7 +114,8 @@ export function createHttpApi(getToken: TokenGetter, baseUrl = API_URL): Api {
     })).parse((await request('/agent/messages')).messages),
     saveChatMessage: async (message) => void (await post('/agent/messages', message)),
     clearChatMessages: async () => void (await request('/agent/messages', { method: 'DELETE' })),
-    loadSeed: async () => void (await post('/dev/seed')),
+    seedOptions: async () => z.array(seedOptionSchema).parse((await request('/dev/seeds')).scenarios),
+    loadSeed: async (scenarioId) => void (await post('/dev/seed', { scenarioId })),
     createDraft: async (text) => draftSchema.parse((await post('/intents/draft', { text })).draft),
     answerDraft: async (id, text) => draftSchema.parse((await post(`/intents/draft/${id}/answer`, { text })).draft),
     confirmDraft: async (id) => void (await post(`/intents/draft/${id}/confirm`)),

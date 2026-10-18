@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useApi } from '../api/context'
 import type { Draft, MyIntent } from '../api/schemas'
 import { pollWhenDown, useLive } from '../hooks/liveContext'
@@ -159,11 +159,20 @@ function NewIntent({ draft, setDraft }: { draft: Draft | null; setDraft: (draft:
 export function MyIntents() {
   const api = useApi()
   const [draft, setDraft] = useState<Draft | null>(null)
+  const [choosingSeed, setChoosingSeed] = useState(false)
+  const [scenarioId, setScenarioId] = useState('')
+  const seedDialog = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    if (choosingSeed) seedDialog.current?.showModal()
+    else seedDialog.current?.close()
+  }, [choosingSeed])
   const { up } = useLive()
   const queryClient = useQueryClient()
+  const scenarios = useQuery({ queryKey: ['seed-options'], queryFn: () => api.seedOptions(), enabled: choosingSeed })
   const seed = useMutation({
-    mutationFn: () => api.loadSeed(),
+    mutationFn: (id: string) => api.loadSeed(id),
     onSuccess: () => {
+      setChoosingSeed(false)
       void queryClient.invalidateQueries({ queryKey: ['mine-intents'] })
       void queryClient.invalidateQueries({ queryKey: ['public'] })
       void queryClient.invalidateQueries({ queryKey: ['arrangements'] })
@@ -174,11 +183,49 @@ export function MyIntents() {
     <section aria-label="Your intents" className="dashboard-panel panel-mine flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-amber-900/10 px-4 py-4">
         <h2 className="text-lg font-semibold">Your intents</h2>
-        <button disabled={seed.isPending} onClick={() => seed.mutate()} className="rounded-lg border border-amber-900/15 bg-white/70 px-2 py-1 text-xs disabled:opacity-50">
+        <button disabled={seed.isPending} aria-haspopup="dialog" aria-controls="seed-picker" onClick={() => { seed.reset(); setChoosingSeed(true) }} className="rounded-lg border border-amber-900/15 bg-white/70 px-2 py-1 text-xs disabled:opacity-50">
           {seed.isPending ? 'Loading…' : 'Load seed data'}
         </button>
       </div>
-      {seed.isError && <p role="alert" className="px-4 pt-2 text-xs text-red-600">{errorMessage(seed.error)}</p>}
+      <dialog
+        ref={seedDialog}
+        id="seed-picker"
+        aria-labelledby="seed-picker-title"
+        onClose={() => setChoosingSeed(false)}
+        onCancel={(event) => { if (seed.isPending) event.preventDefault() }}
+        className="m-auto w-[calc(100%_-_2rem)] max-w-sm rounded-2xl border border-slate-200 bg-white p-5 text-slate-900 shadow-xl backdrop:bg-slate-950/35 backdrop:backdrop-blur-sm"
+      >
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h3 id="seed-picker-title" className="text-lg font-semibold">Load seed data</h3>
+          <button type="button" aria-label="Close seed picker" disabled={seed.isPending} onClick={() => setChoosingSeed(false)} className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-50">
+            <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+              <path d="m4 4 8 8M12 4l-8 8" />
+            </svg>
+          </button>
+        </div>
+        <form className="space-y-3" onSubmit={(event) => {
+          event.preventDefault()
+          const selected = scenarioId || scenarios.data?.[0]?.id
+          if (selected) seed.mutate(selected)
+        }}>
+          <label htmlFor="seed-dataset" className="block text-xs font-medium">Seed dataset</label>
+          {scenarios.isPending && <p className="text-xs text-slate-600">Loading datasets...</p>}
+          {scenarios.isError && <p role="alert" className="text-xs text-red-600">{errorMessage(scenarios.error)}</p>}
+          {seed.isError && <p role="alert" className="text-xs text-red-600">{errorMessage(seed.error)}</p>}
+          {scenarios.data && (
+            <>
+              <select id="seed-dataset" value={scenarioId || scenarios.data[0]?.id || ''} onChange={(event) => setScenarioId(event.target.value)} disabled={seed.isPending} className="w-full rounded-lg border border-slate-300 bg-white p-2 text-xs">
+                {scenarios.data.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.label}</option>)}
+              </select>
+              <p className="text-xs text-slate-600">{scenarios.data.find((scenario) => scenario.id === (scenarioId || scenarios.data[0]?.id))?.description}</p>
+              <p className="text-xs text-amber-900">Replaces edward, acmm, and dawg's current listings.</p>
+              <button disabled={seed.isPending || scenarios.data.length === 0} className="w-full rounded-lg bg-slate-900 px-3 py-2 text-xs text-white disabled:opacity-50">
+                {seed.isPending ? 'Loading...' : 'Load selected dataset'}
+              </button>
+            </>
+          )}
+        </form>
+      </dialog>
       <div role="region" aria-label="Your intent list" tabIndex={0} className="intent-scroll mx-3 my-3 min-h-0 flex-1 overflow-y-scroll rounded-xl border border-amber-900/15 bg-white/25 p-2">
       {query.isError && <p role="alert" className="text-sm text-red-600">{errorMessage(query.error)}</p>}
       {query.data?.length === 0 && <p className="text-sm text-slate-500">Nothing posted yet.</p>}

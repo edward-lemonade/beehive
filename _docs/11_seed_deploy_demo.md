@@ -41,6 +41,38 @@ Steps:
 - Add `NEGOTIATION_ROUNDS=3` and a visible 500 ms delay between rounds in demo mode (`DEMO_MODE=true`) so the feed is readable.
 
 ## Seed data (`seed/`)
+
+### In-app datasets
+
+In development, **Load seed data** opens a mini-modal listing datasets from
+`GET /dev/seeds`. Choose a dataset and confirm with **Load selected dataset**.
+`POST /dev/seed` accepts `{ "scenarioId": "ticket-swap" }` or
+`{ "scenarioId": "ticket-shopping" }`; omitting `scenarioId` keeps the original
+swap as the default. Both endpoints require authentication and are unavailable
+in production.
+
+- **Original: three-way ticket swap** (`ticket-swap`): edward offers Saturday
+  and Sunday tickets for a 3-day ticket; acmm wants Saturday and Sunday tickets;
+  dawg offers a 3-day ticket for $200.
+- **Ticket shopping: find a better deal** (`ticket-shopping`): acmm offers a
+  ticket for $100 non-negotiable, dawg offers a ticket for $110 negotiable,
+  and edward looks for a ticket without specifying a price. Sellers are posted
+  before the buyer so both options are available when negotiation begins.
+
+Loading either dataset replaces these three accounts' existing listings. Each
+account must have signed in once with its matching handle. Mock mode can display
+the options but cannot load live seed data.
+
+For a simple purchase without a buyer-named price, the negotiator compares
+matching firm listings for the same wanted item. If a negotiable seller's ask
+is higher, it opens 10% below the cheapest comparable firm price. In the shopping
+dataset edward's agent asks dawg, **"Could you do $90?"**, using acmm's $100
+listing as the benchmark. This is an opening request, not a claim that dawg has
+accepted; dawg must approve a price below the negotiable ask, and edward must
+also approve before a purchase commits. Without a cheaper comparable firm
+listing, the existing ask-price opening is unchanged. Explicit user prices and
+firm seller prices are not discounted.
+
 Seed users have verified phones. The team's own phones are three of them.
 
 Commands:

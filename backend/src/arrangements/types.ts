@@ -18,7 +18,7 @@ export type StoredSlot = {
 };
 
 /** A price one side has put to the other's user and is waiting on. At most one exists per arrangement. */
-export type PriceProposal = { linkId: string; amountCents: number; fromIntentId: string };
+export type PriceProposal = { linkId: string; amountCents: number; fromIntentId: string; source?: 'agent' | 'user' };
 
 export type StoredArrangement = {
   id: string;

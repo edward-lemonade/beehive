@@ -149,10 +149,13 @@ class Session {
   private async askUser(side: Side, round: number, amountCents: number): Promise<void> {
     await this.say(side, { round, amountCents, tone: side === 'payer' ? 'defer' : 'review' });
     const { from, to } = this.ids(side);
-    events.emit('negotiation.awaiting_user', {
-      arrangementId: this.opts.arrangementId, linkId: this.opts.key, intentId: from, counterpartIntentId: to, amountCents, side,
-    });
-    this.finish({ state: 'agreed', amountCents, rounds: this.maxRound, pendingUser: true });
+    // Arrangements publish their update only after the proposal is persisted.
+    if (!this.opts.arrangementId) {
+      events.emit('negotiation.awaiting_user', {
+        linkId: this.opts.key, intentId: from, counterpartIntentId: to, amountCents, side,
+      });
+    }
+    this.finish({ state: 'agreed', amountCents, rounds: this.maxRound, pendingUser: true, pendingSide: side });
   }
 
   private async walk(side: Side, round: number): Promise<void> {

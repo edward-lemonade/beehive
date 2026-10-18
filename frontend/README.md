@@ -13,6 +13,12 @@ red corner X to delete them. The new-intent and chat composers stay at the
 bottom of their panels, with multiline text areas and full-width submit
 buttons. Enter adds a new line; use Create or Send to submit.
 
+**Load seed data** opens a small modal with the available backend datasets,
+including the original ticket swap and the ticket-shopping negotiation scenario.
+Choosing a dataset and loading it replaces edward, acmm, and dawg's listings.
+The modal closes after a successful load; failures are shown inside it. Live
+seeding is unavailable in mock mode.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

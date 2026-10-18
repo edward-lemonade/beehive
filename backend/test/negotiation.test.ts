@@ -291,6 +291,51 @@ describe('sessions', () => {
 });
 
 describe('direct negotiation', () => {
+  it('asks the negotiable $110 seller for $90 when a comparable $100 firm ticket is available', async () => {
+    add('edward', [{ kind: 'cash', label: 'cash', attrs: {}, qty: 1 }], [[ticket('ticket')]], null);
+    add('acmm', [ticket('ticket')], [[cash(10000, 'firm')]], 10000, 10000);
+    add('dawg', [ticket('ticket')], [[cash(11000, 'flexible')]], null, 11000);
+    await connect('edward', 'acmm', 'dawg');
+    const pending: Array<{ intentId: string; amountCents: number }> = [];
+    const onPending = (event: { intentId: string; amountCents: number }) => { pending.push(event); };
+    events.on('negotiation.awaiting_user', onPending);
+    try {
+      const result = await negotiateDirect('uedward', { ownIntentId: 'edward', targetIntentId: 'dawg' });
+      expect(result).toMatchObject({ status: 'pending', amountCents: 9000 });
+      expect(log.entries.find((entry) => entry.kind === 'offer')).toMatchObject({
+        from: 'edward', to: 'dawg', amountCents: 9000,
+      });
+      expect(log.entries.some((entry) => entry.from === 'edward' && entry.text === 'Could you do $90?')).toBe(true);
+      expect(pending).toEqual([{ intentId: 'dawg', amountCents: 9000, side: 'receiver', counterpartIntentId: 'edward', linkId: expect.any(String) }]);
+      expect(log.entries.some((entry) => entry.kind === 'accept')).toBe(false);
+    } finally {
+      events.off('negotiation.awaiting_user', onPending);
+    }
+  });
+
+  it('does not discount the firm seller or an unrelated alternative', async () => {
+    add('edward', [{ kind: 'cash', label: 'cash', attrs: {}, qty: 1 }], [[ticket('concert')]], null);
+    add('acmm', [ticket('concert')], [[cash(10000, 'firm')]], 10000, 10000);
+    add('dawg', [ticket('concert')], [[cash(11000, 'flexible')]], null, 11000);
+    await connect('edward', 'acmm', 'dawg');
+    await negotiateDirect('uedward', { ownIntentId: 'edward', targetIntentId: 'acmm' });
+    expect(log.entries.find((entry) => entry.kind === 'offer')?.amountCents).toBe(10000);
+    repo.intents.get('acmm')!.public.give = [ticket('unrelated')];
+    repo.intents.get('acmm')!.version += 1;
+    log.entries.length = 0;
+    await negotiateDirect('uedward', { ownIntentId: 'edward', targetIntentId: 'dawg' });
+    expect(log.entries.find((entry) => entry.kind === 'offer')?.amountCents).toBe(11000);
+  });
+
+  it('preserves an explicit buyer offer instead of replacing it with a competitive opening', async () => {
+    add('edward', [cash(9500)], [[ticket('ticket')]], -10000, -9500);
+    add('acmm', [ticket('ticket')], [[cash(10000, 'firm')]], 10000, 10000);
+    add('dawg', [ticket('ticket')], [[cash(11000, 'flexible')]], null, 11000);
+    await connect('edward', 'acmm', 'dawg');
+    await negotiateDirect('uedward', { ownIntentId: 'edward', targetIntentId: 'dawg' });
+    expect(log.entries.find((entry) => entry.kind === 'offer')?.amountCents).toBe(9500);
+  });
+
   it('negotiates the shared link for relevant intents', async () => {
     s1();
     await connect('A', 'B', 'C');
