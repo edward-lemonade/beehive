@@ -56,52 +56,18 @@ export function setIntentParser(parser?: IntentParser): void {
   activeParser = parser ?? parseIntentWithLLM;
 }
 
-function hasAttr(item: Item, key: string): boolean {
-  const value = item.attrs[key];
-  return typeof value === 'string' ? value.trim().length > 0 : typeof value === 'number' && Number.isFinite(value);
-}
-
+// Intents stay free text. Only ask when we cannot tell what is offered or wanted.
 function missingFields(parsed: ParsedIntent): string[] {
   const missing: string[] = [];
   if (parsed.give.length === 0 && parsed.want.length === 0) missing.push('item');
-  if (![...parsed.give, ...parsed.want.flatMap((want) => want.anyOf)].some((item) => item.kind !== 'cash')) {
+  else if (![...parsed.give, ...parsed.want.flatMap((want) => want.anyOf)].some((item) => item.kind !== 'cash')) {
     missing.push('nonCashItem');
   }
-
-  if ([...parsed.give, ...parsed.want.flatMap((want) => want.anyOf)]
-    .some((item) => item.qty > 1 && parsed.separateOrTogether === null)) {
-    missing.push('separateOrTogether');
-  }
-
-  for (const [side, items] of [['give', parsed.give], ['want', parsed.want.flatMap((want) => want.anyOf)]] as const) {
-    for (const item of items) {
-      if (item.kind === 'ticket') {
-        if (!hasAttr(item, 'event')) missing.push(`${side}.ticket.event`);
-        if (!hasAttr(item, 'day')) missing.push(`${side}.ticket.day`);
-      }
-      if (item.kind === 'sublet') {
-        if (!hasAttr(item, 'dates')) missing.push(`${side}.sublet.dates`);
-        if (!hasAttr(item, 'rentCents')) missing.push(`${side}.sublet.rent`);
-      }
-      if (item.kind === 'cash' && (item.amountCents === undefined || item.amountCents <= 0)) {
-        missing.push(`${side}.cash.amount`);
-      }
-    }
-  }
-  return [...new Set(missing)];
+  return missing;
 }
 
 function questionFor(missing: string[]): string | null {
-  const first = missing[0];
-  if (!first) return null;
-  if (first === 'item' || first === 'nonCashItem') return 'What are you offering or looking for?';
-  if (first === 'separateOrTogether') return 'Sell them separately or only together?';
-  if (first.endsWith('.ticket.event')) return 'What event is the ticket for?';
-  if (first.endsWith('.ticket.day')) return 'What day is the ticket for?';
-  if (first.endsWith('.sublet.dates')) return 'What dates is the sublet available?';
-  if (first.endsWith('.sublet.rent')) return 'What is the rent?';
-  if (first.endsWith('.cash.amount')) return 'What amount of cash is part of the trade?';
-  return null;
+  return missing.length > 0 ? 'What are you offering or looking for?' : null;
 }
 
 function publicFreeText(text: string): string {
@@ -121,7 +87,7 @@ function createIntent(
   sourceText: string,
   parsed: ParsedIntent,
   state: IntentState,
-  owner: { handle: string; tier: string },
+  owner: { handle: string; tier: string; imageUrl?: string | null },
 ): IntentRecord {
   const now = clock.now();
   const id = randomUUID();
@@ -129,6 +95,7 @@ function createIntent(
     intentId: id,
     version: 0,
     ownerHandle: owner.handle,
+    ownerImageUrl: owner.imageUrl ?? null,
     tier: owner.tier,
     give: parsed.give,
     want: parsed.want,
@@ -243,7 +210,7 @@ async function answerDraftParsed(
 export function confirmDraft(
   draftId: string,
   userId: string,
-  owner: { handle: string; tier: string },
+  owner: { handle: string; tier: string; imageUrl?: string | null },
 ): Promise<IntentRecord[]> {
   const draft = drafts.get(draftId);
   if (!draft) return confirmDraftPersisted(draftId, userId, owner);
@@ -272,7 +239,7 @@ export function confirmDraft(
 async function confirmDraftPersisted(
   draftId: string,
   userId: string,
-  owner: { handle: string; tier: string },
+  owner: { handle: string; tier: string; imageUrl?: string | null },
 ): Promise<IntentRecord[]> {
   const draft = assertOwner(drafts.get(draftId), userId);
   if (draft.confirmation) return draft.confirmation;
@@ -382,6 +349,14 @@ export async function withdrawIntent(intentId: string, userId: string): Promise<
   );
   if (!withdrawn) throw new IntentServiceError('Intent changed before it could be withdrawn', 409);
   events.emit('intent.closed', { intentId });
+}
+
+export async function deleteIntent(intentId: string, userId: string): Promise<void> {
+  const intent = assertOwner(await activeRepository.get(intentId), userId);
+  if (intent.state !== 'withdrawn') throw new IntentServiceError('Only withdrawn intents can be deleted', 409);
+  if (!(await activeRepository.remove(intentId, userId, 'withdrawn'))) {
+    throw new IntentServiceError('Intent changed before it could be deleted', 409);
+  }
 }
 
 export async function expireDue(): Promise<number> {

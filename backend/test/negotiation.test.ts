@@ -33,6 +33,7 @@ class MemoryRepo implements IntentRepository {
   async changeState() { return undefined; }
   async expireDue() { return []; }
   async listMine(ownerId: string) { return [...this.intents.values()].filter((i) => i.ownerId === ownerId); }
+  async remove(id: string, ownerId: string, state: string) { const i = this.intents.get(id); if (!i || i.ownerId !== ownerId || i.state !== state) return false; return this.intents.delete(id); }
   async listOpen() { return [...this.intents.values()].filter((i) => i.state === 'open'); }
 }
 
@@ -141,6 +142,17 @@ describe('pricing (pure)', () => {
   });
 });
 
+describe('negotiable payer', () => {
+  it('opens at the ask instead of $0 and never pays above it', () => {
+    const terms: LinkTerms = {
+      link: link('A|B', 'A', 'B', 'A'), payer: 'A', receiver: 'B', payCents: null, askCents: 30000, payerFirm: false, receiverFirm: false,
+    };
+    const lb = linkBounds(terms, { minCents: 0, maxCents: UNBOUNDED }, { minCents: 20000, maxCents: UNBOUNDED });
+    expect(lb.payerOpenCents).toBe(30000);
+    expect(lb.payer.maxCents).toBe(30000);
+  });
+});
+
 describe('priceArrangement', () => {
   it('S1 prices B-C at $50 and A-B between $50 and $60 within 3 rounds', async () => {
     s1();
@@ -203,7 +215,7 @@ describe('priceArrangement', () => {
   it('drops a leaking wording at the guard and continues with the template', async () => {
     s1();
     await connect('A', 'B', 'C');
-    setWordingProvider(async () => 'my minimum is 5000');
+    setWordingProvider(async () => 'my limit is 6000');
     const violations: string[] = [];
     bus.onViolation((v) => violations.push(v.rule));
     const result = await priceArrangement(arrangement());
@@ -212,7 +224,7 @@ describe('priceArrangement', () => {
     const says = log.entries.filter((e) => e.kind === 'say').map((e) => e.text ?? '');
     expect(says.length).toBeGreaterThan(0);
     const fromC = log.entries.filter((e) => e.kind === 'say' && e.from === 'C').map((e) => e.text ?? '');
-    expect(fromC.some((t) => t.includes('5000'))).toBe(false);
+    expect(fromC.some((t) => t.includes('6000'))).toBe(false);
     expect(says.every((t) => !/\bh-[ABC]\b/i.test(t))).toBe(true);
   });
 });
@@ -246,6 +258,42 @@ describe('sessions', () => {
       }
     }
   }, 30000);
+
+  it('lets the receiver answer a user-named price: ask its user when above its minimum, decline below', async () => {
+    add('A', [cash(1)], [[ticket('x1')]], null);
+    add('B', [ticket('x1')], [[cash(1)]], null);
+    await connect('A', 'B');
+    const asked: Array<[string, number]> = [];
+    events.on('negotiation.awaiting_user', (e) => asked.push([e.side ?? '', e.amountCents]));
+    const bounds = (min: number) => ({
+      payer: { minCents: 0, maxCents: 10000 },
+      receiver: { minCents: min, maxCents: UNBOUNDED },
+      payerOpenCents: 9000, receiverAskCents: 10000, directed: true,
+    });
+    const ok = await runSession({ key: 'dir/1', payerId: 'A', receiverId: 'B', bounds: bounds(5000) });
+    expect(ok).toMatchObject({ state: 'agreed', amountCents: 9000, pendingUser: true });
+    expect(asked).toEqual([['receiver', 9000]]);
+    const no = await runSession({ key: 'dir/2', payerId: 'A', receiverId: 'B', bounds: bounds(9500) });
+    expect(no.state).toBe('failed');
+  });
+
+  it('hands a negotiable payer\'s counter-price to its user instead of accepting', async () => {
+    add('A', [cash(1)], [[ticket('x1')]], null);
+    add('B', [ticket('x1')], [[cash(1)]], null);
+    await connect('A', 'B');
+    const asked: number[] = [];
+    events.on('negotiation.awaiting_user', (e) => asked.push(e.amountCents));
+    const result = await runSession({
+      key: 'defer/1', payerId: 'A', receiverId: 'B',
+      bounds: {
+        payer: { minCents: 0, maxCents: 30000 },
+        receiver: { minCents: 0, maxCents: UNBOUNDED },
+        payerOpenCents: 18000, receiverAskCents: 30000, payerNegotiable: true,
+      },
+    });
+    expect(result).toMatchObject({ state: 'agreed', amountCents: 20000, pendingUser: true });
+    expect(asked).toEqual([20000]);
+  });
 });
 
 describe('direct negotiation', () => {

@@ -11,6 +11,7 @@ import {
   listMine,
   listPublicIntents,
   reopenIntent,
+  deleteIntent,
   withdrawIntent,
 } from './service.js';
 
@@ -57,7 +58,7 @@ intentsRouter.post('/draft/:id/confirm', async (c) => {
   const user = c.get('user');
   try {
     getOwnedDraft(c.req.param('id'), user.id);
-    const confirmed = await confirmDraft(c.req.param('id'), user.id, { handle: user.handle, tier: user.tier });
+    const confirmed = await confirmDraft(c.req.param('id'), user.id, { handle: user.handle, tier: user.tier, imageUrl: user.imageUrl });
     return c.json({ ok: true, intents: confirmed.map((intent) => ({
       id: intent.id,
       version: intent.version,
@@ -92,6 +93,15 @@ intentsRouter.patch('/:id', async (c) => {
 intentsRouter.post('/:id/withdraw', async (c) => {
   try {
     await withdrawIntent(c.req.param('id'), c.get('user').id);
+    return c.json({ ok: true });
+  } catch (error) {
+    return failure(error, c);
+  }
+});
+
+intentsRouter.delete('/:id', async (c) => {
+  try {
+    await deleteIntent(c.req.param('id'), c.get('user').id);
     return c.json({ ok: true });
   } catch (error) {
     return failure(error, c);

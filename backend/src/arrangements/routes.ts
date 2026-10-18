@@ -8,7 +8,7 @@ import { ArrangementError } from './types.js';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const furtherSchema = z.object({
-  targetCents: z.number().int().nonnegative(),
+  targetCents: z.number().int().nonnegative().optional(),
   linkId: z.string().min(1).optional(),
 }).strict();
 

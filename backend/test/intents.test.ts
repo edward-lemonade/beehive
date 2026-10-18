@@ -88,6 +88,11 @@ class MemoryIntentRepository implements IntentRepository {
     return [...this.intents.values()].filter((intent) => intent.ownerId === ownerId);
   }
 
+  async remove(id: string, ownerId: string, state: string): Promise<boolean> {
+    const i = this.intents.get(id);
+    return !!i && i.ownerId === ownerId && i.state === state && this.intents.delete(id);
+  }
+
   async listOpen(): Promise<IntentRecord[]> {
     return [...this.intents.values()].filter((intent) => intent.state === 'open');
   }
@@ -150,17 +155,18 @@ describe('intent parser examples', () => {
 });
 
 describe('intent drafts and lifecycle', () => {
-  it('asks the quantity clarification before other missing ticket details', async () => {
-    const draft = await createDraft('quantity-user', 'two tickets');
-    expect(draft.question).toBe('Sell them separately or only together?');
-    expect(draft.missing).toContain('separateOrTogether');
+  it('does not ask for event, day or quantity details', async () => {
+    for (const text of ['selling saturday niteharts ticket for $100', 'selling a Coachella ticket', 'two tickets']) {
+      const draft = await createDraft('detail-user', text);
+      expect(draft.question).toBeNull();
+      expect(draft.missing).toEqual([]);
+    }
   });
 
-  it('merges a draft answer with the original text and recomputes missing fields', async () => {
-    const draft = await createDraft('answer-user', 'selling a Coachella ticket');
-    expect(draft.question).toBe('What day is the ticket for?');
-    const answered = await answerDraft(draft.id, 'Friday', 'answer-user');
-    expect(answered.parsed.give[0]?.attrs).toMatchObject({ event: 'coachella', day: 'friday' });
+  it('asks only when it cannot tell what is offered or wanted, and merges the answer', async () => {
+    const draft = await createDraft('answer-user', 'want $200');
+    expect(draft.question).toBe('What are you offering or looking for?');
+    const answered = await answerDraft(draft.id, 'selling a Friday Coachella ticket', 'answer-user');
     expect(answered.missing).toEqual([]);
     expect(answered.question).toBeNull();
   });
@@ -261,5 +267,20 @@ describe('intent drafts and lifecycle', () => {
       expect.objectContaining({ status: 400 }),
     );
     await expect(confirmDraft('missing-draft', 'incomplete-user', owner)).rejects.toThrow(IntentServiceError);
+  });
+});
+
+describe('negotiable price default', () => {
+  it('adds an amount-less cash give when a buyer states no price', async () => {
+    const { parseIntentText, withNegotiablePrice } = await import('../src/intents/parse.js');
+    const parsed = withNegotiablePrice(parseIntentText('looking for niteharts 3-day ticket'));
+    expect(parsed.give).toEqual([expect.objectContaining({ kind: 'cash', flex: 'flexible' })]);
+    expect(parsed.give[0].amountCents).toBeUndefined();
+  });
+
+  it('keeps a stated price', async () => {
+    const { parseIntentText, withNegotiablePrice } = await import('../src/intents/parse.js');
+    const parsed = withNegotiablePrice(parseIntentText('selling saturday niteharts ticket for $100'));
+    expect(parsed.want[0].anyOf[0]).toMatchObject({ kind: 'cash', amountCents: 10000 });
   });
 });

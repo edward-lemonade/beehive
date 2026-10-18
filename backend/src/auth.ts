@@ -1,13 +1,14 @@
-import { verifyToken } from '@clerk/backend';
+import { createClerkClient, verifyToken } from '@clerk/backend';
 import type { Context, MiddlewareHandler } from 'hono';
 import { config } from './config.js';
-import { ensureUserForClerkId } from './db/index.js';
+import { ensureUserForClerkId, syncHandle } from './db/index.js';
 
 export type AuthUser = {
   id: string;
   clerkId: string;
   handle: string;
   tier: string;
+  imageUrl: string | null;
 };
 
 declare module 'hono' {
@@ -25,6 +26,24 @@ function parseBearer(tokenHeader: string | undefined): string | null {
 function stableHandle(clerkId: string): string {
   const suffix = clerkId.slice(-4) || '0000';
   return `Otter-${suffix}`;
+}
+
+const clerk = createClerkClient({ secretKey: config.CLERK_SECRET_KEY });
+type Profile = { handle: string | null; imageUrl: string | null };
+const profileCache = new Map<string, Profile>();
+
+async function clerkProfile(clerkId: string): Promise<Profile> {
+  const cached = profileCache.get(clerkId);
+  if (cached) return cached;
+  try {
+    const u = await clerk.users.getUser(clerkId);
+    const name = [u.firstName, u.lastName].filter(Boolean).join(' ');
+    const profile = { handle: u.username || name || null, imageUrl: u.imageUrl || null };
+    profileCache.set(clerkId, profile);
+    return profile;
+  } catch {
+    return { handle: null, imageUrl: null };
+  }
 }
 
 export const requireAuth = (() => {
@@ -58,11 +77,18 @@ export const requireAuth = (() => {
       return c.json({ ok: false, error: 'Authentication failed' }, 401);
     }
 
+    const profile = await clerkProfile(clerkId);
+    if (profile.handle && profile.handle !== user.handle) {
+      user.handle = profile.handle;
+      await syncHandle(user.id, profile.handle);
+    }
+
     c.set('user', {
       id: user.id,
       clerkId: user.clerk_id,
       handle: user.handle,
       tier: user.tier,
+      imageUrl: profile.imageUrl,
     } satisfies AuthUser);
     await next();
   };

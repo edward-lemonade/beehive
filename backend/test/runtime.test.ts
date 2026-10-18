@@ -24,6 +24,7 @@ class MemoryRepo implements IntentRepository {
   async changeState() { return undefined; }
   async expireDue() { return []; }
   async listMine(ownerId: string) { return [...this.intents.values()].filter((i) => i.ownerId === ownerId); }
+  async remove(id: string, ownerId: string, state: string) { const i = this.intents.get(id); if (!i || i.ownerId !== ownerId || i.state !== state) return false; return this.intents.delete(id); }
   async listOpen() { return [...this.intents.values()].filter((i) => i.state === 'open'); }
 }
 

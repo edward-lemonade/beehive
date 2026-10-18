@@ -92,7 +92,10 @@ class Session {
       linkId: this.opts.key, arrangementId: this.opts.arrangementId ?? null,
       round, from, to, kind, amountCents, text, at: clock.now(),
     });
-    events.emit('negotiation.round', { arrangementId: this.opts.arrangementId, linkId: this.opts.key, round });
+    events.emit('negotiation.round', {
+      arrangementId: this.opts.arrangementId, linkId: this.opts.key, round,
+      fromIntentId: from, toIntentId: to, kind, amountCents, text,
+    });
   }
 
   private async deliver(side: Side, body: BusBody): Promise<boolean> {
@@ -126,6 +129,16 @@ class Session {
         return;
       }
     }
+  }
+
+  // The payer never named a price, so the agent stops and hands the counter-price to its user instead of accepting.
+  private async askUser(side: Side, round: number, amountCents: number): Promise<void> {
+    await this.say(side, { round, amountCents, tone: side === 'payer' ? 'defer' : 'review' });
+    const { from, to } = this.ids(side);
+    events.emit('negotiation.awaiting_user', {
+      arrangementId: this.opts.arrangementId, linkId: this.opts.key, intentId: from, counterpartIntentId: to, amountCents, side,
+    });
+    this.finish({ state: 'agreed', amountCents, rounds: this.maxRound, pendingUser: true });
   }
 
   private async walk(side: Side, round: number): Promise<void> {
@@ -165,6 +178,19 @@ class Session {
     const round = body.round;
     if (side === 'receiver') {
       const ask = nextOffer(this.state(round), 'receiver');
+      // A price with no stated floor is only an ask: the seller's user decides on anything lower.
+      if (this.opts.bounds.receiver.floorStated === false && body.amountCents > 0 && body.amountCents < ask) {
+        await this.askUser('receiver', round, body.amountCents);
+        return;
+      }
+      if (this.opts.bounds.directed && body.amountCents < ask) {
+        if (body.amountCents >= this.opts.bounds.receiver.minCents) await this.askUser('receiver', round, body.amountCents);
+        else {
+          await this.say('receiver', { round, amountCents: null, tone: 'walk' });
+          await this.walk('receiver', round);
+        }
+        return;
+      }
       if (body.amountCents >= ask) {
         await this.sendMoney('receiver', 'accept', round, ask, 'accept');
       } else {
@@ -175,6 +201,12 @@ class Session {
 
     const counter = body.amountCents;
     const planned = nextOffer(this.state(round + 1), 'payer');
+    const b = this.opts.bounds;
+    // No stated price: any counter above the opening is the user's call, so stop haggling and ask.
+    if (b.payerNegotiable && counter > b.payerOpenCents && counter <= b.payer.maxCents) {
+      await this.askUser('payer', round, counter);
+      return;
+    }
     if (counter <= planned) await this.sendMoney('payer', 'accept', round, counter, 'accept');
     else if (round < this.rounds) await this.sendMoney('payer', 'offer', round + 1, planned, 'open');
     else await this.walk('payer', round);

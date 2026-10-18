@@ -565,24 +565,27 @@ export async function declineAndWithdraw(userId: string, arrangementId: string):
 
 export type FurtherResult =
   | { status: 'agreed'; terms: TermsView }
+  | { status: 'pending'; amountCents: number }
   | { status: 'failed'; reason: string };
 
 export function negotiateFurther(
   userId: string,
   arrangementId: string,
-  input: { targetCents: number; linkId?: string },
+  input: { targetCents?: number; linkId?: string },
 ): Promise<FurtherResult> {
   return locked(arrangementId, async (): Promise<FurtherResult> => {
     const { arr, slot } = await participantContext(userId, arrangementId);
     if (arr.state !== 'proposed') throw notProposed();
-    if (slot.approval !== 'requested') throw new ArrangementError('Only a pending request can be renegotiated', 409);
+    // A user who already approved may still counter: a changed price clears their approval so they re-approve the new terms.
+    if (slot.approval !== 'requested' && slot.approval !== 'approved') throw new ArrangementError('Only an open request can be renegotiated', 409);
 
     const cashLinks = arr.links.filter((l) => l.payer && (l.a === slot.intentId || l.b === slot.intentId));
     const link = input.linkId ? cashLinks.find((l) => l.id === input.linkId) : cashLinks.length === 1 ? cashLinks[0] : undefined;
     if (!link) throw new ArrangementError('Choose which cash link to renegotiate', 400);
 
     const side = link.payer === slot.intentId ? 'payer' : 'receiver';
-    const result = await repriceLink(toContract(arr), link.id, { side, cents: input.targetCents }, `r${arr.revision}`);
+    const result = await repriceLink(toContract(arr), link.id, { side, ...(input.targetCents !== undefined ? { cents: input.targetCents } : {}) }, `r${arr.revision}`);
+    if (result.state === 'pending') return { status: 'pending', amountCents: result.amountCents };
     if (result.state !== 'agreed') return { status: 'failed', reason: result.reason };
 
     arr.links = arr.links.map((l) => (l.id === link.id ? { ...l, amountCents: result.amountCents, state: 'agreed' as const } : l));

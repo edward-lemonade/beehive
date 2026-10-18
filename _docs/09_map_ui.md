@@ -2,6 +2,8 @@
 
 **Spec:** 6.17, 6.18, 6.9, G7. **Depends on:** 01 (contracts copy), 02 (routes). Can start with mocked data. **Host:** Vercel.
 
+> **Superseded in part:** the panel layout below was redesigned as a chat with the user's agent. See [12_agent_chat_ui.md](12_agent_chat_ui.md). The feed, intent list, API client and stream described here still apply.
+
 Location and map-based browsing are deferred. Until location is added back to the intent model, this slice provides a public intent feed and panels for the user's own intents, approvals, and agent activity. Sign-in with Clerk.
 
 ## Stack

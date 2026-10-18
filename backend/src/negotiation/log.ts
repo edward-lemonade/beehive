@@ -15,6 +15,8 @@ export type NegotiationLogEntry = {
 export interface NegotiationLogRepository {
   append(entry: NegotiationLogEntry): Promise<void>;
   forLink(linkId: string): Promise<NegotiationLogEntry[]>;
+  /** Most recent entries sent or received by any of these intents, oldest first. */
+  forIntents(intentIds: string[], limit: number): Promise<NegotiationLogEntry[]>;
 }
 
 type Row = {
@@ -39,19 +41,32 @@ export class PostgresNegotiationLogRepository implements NegotiationLogRepositor
 
   async forLink(linkId: string): Promise<NegotiationLogEntry[]> {
     const rows = await sql<Row[]>`SELECT * FROM negotiation_log WHERE link_id = ${linkId} ORDER BY id`;
-    return rows.map((r) => ({
-      linkId: r.link_id,
-      arrangementId: r.arrangement_id,
-      round: r.round,
-      from: r.from_intent,
-      to: r.to_intent,
-      kind: r.kind,
-      amountCents: r.amount_cents === null ? null : Number(r.amount_cents),
-      text: r.text,
-      at: Number(r.created_at),
-    }));
+    return rows.map(toEntry);
+  }
+
+  async forIntents(intentIds: string[], limit: number): Promise<NegotiationLogEntry[]> {
+    if (intentIds.length === 0) return [];
+    const rows = await sql<Row[]>`
+      SELECT * FROM (
+        SELECT * FROM negotiation_log
+        WHERE from_intent = ANY(${intentIds}::uuid[]) OR to_intent = ANY(${intentIds}::uuid[])
+        ORDER BY id DESC LIMIT ${limit}
+      ) recent ORDER BY id`;
+    return rows.map(toEntry);
   }
 }
+
+const toEntry = (r: Row): NegotiationLogEntry => ({
+  linkId: r.link_id,
+  arrangementId: r.arrangement_id,
+  round: r.round,
+  from: r.from_intent,
+  to: r.to_intent,
+  kind: r.kind,
+  amountCents: r.amount_cents === null ? null : Number(r.amount_cents),
+  text: r.text,
+  at: Number(r.created_at),
+});
 
 export class MemoryNegotiationLogRepository implements NegotiationLogRepository {
   readonly entries: NegotiationLogEntry[] = [];
@@ -60,6 +75,10 @@ export class MemoryNegotiationLogRepository implements NegotiationLogRepository 
   }
   async forLink(linkId: string): Promise<NegotiationLogEntry[]> {
     return this.entries.filter((e) => e.linkId === linkId);
+  }
+  async forIntents(intentIds: string[], limit: number): Promise<NegotiationLogEntry[]> {
+    const ids = new Set(intentIds);
+    return this.entries.filter((e) => ids.has(e.from) || ids.has(e.to)).slice(-limit);
   }
 }
 

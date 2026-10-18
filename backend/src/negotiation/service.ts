@@ -1,4 +1,4 @@
-import { getEdges } from '../discovery/service.js';
+import { getEdges, refreshEdges } from '../discovery/service.js';
 import type { Link } from '../contracts/index.js';
 import type { StoredIntent } from '../intents/repository.js';
 import { getIntentRepository } from '../intents/service.js';
@@ -62,7 +62,7 @@ export async function negotiateDirect(
   if (own.ownerId !== callerId) return { status: 'forbidden' };
   const target = await repo.get(input.targetIntentId);
   if (!target || target.state !== 'open') return { status: 'not_relevant' };
-  const ownEdges = await getEdges(own.id);
+  const ownEdges = await refreshEdges(own.id);
   if (!ownEdges.some((e) => e.other === target.id)) return { status: 'not_relevant' };
 
   const edge = ownEdges.find((e) => e.other === target.id)!;

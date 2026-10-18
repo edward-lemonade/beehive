@@ -38,6 +38,8 @@ export interface IntentRepository {
   expireDue(now: number): Promise<StoredIntent[]>;
   listMine(ownerId: string): Promise<StoredIntent[]>;
   listOpen(): Promise<StoredIntent[]>;
+  /** Deletes the owner's intent in the given state. Returns whether a row was removed. */
+  remove(intentId: string, ownerId: string, state: IntentState): Promise<boolean>;
 }
 
 type IntentRow = {
@@ -166,6 +168,11 @@ export class PostgresIntentRepository implements IntentRepository {
       `;
       return true;
     });
+  }
+
+  async remove(intentId: string, ownerId: string, state: IntentState): Promise<boolean> {
+    const rows = await sql`DELETE FROM intents WHERE id = ${intentId} AND user_id = ${ownerId} AND state = ${state} RETURNING id`;
+    return rows.length > 0;
   }
 
   async changeState(

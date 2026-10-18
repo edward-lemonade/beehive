@@ -5,7 +5,7 @@ export const WORDING_TIMEOUT_MS = 5000;
 export type WordingContext = {
   round: number;
   amountCents: number | null;
-  tone: 'open' | 'counter' | 'accept' | 'walk';
+  tone: 'open' | 'counter' | 'accept' | 'defer' | 'review' | 'walk';
 };
 
 const dollars = (cents: number): string => {
@@ -19,6 +19,8 @@ export function templateWording(ctx: WordingContext): string {
     case 'open': return `Could you do ${amount}?`;
     case 'counter': return `How about ${amount}?`;
     case 'accept': return 'That works for me.';
+    case 'review': return `${amount} is below my asking price. I'll check with my user.`;
+    case 'defer': return `${amount} is above what I can confirm myself. I'll check with my user.`;
     default: return "Sorry, we can't make this work.";
   }
 }
@@ -60,6 +62,7 @@ export function setWordingProvider(fn?: (ctx: WordingContext) => Promise<string>
 }
 
 export async function wording(ctx: WordingContext): Promise<string> {
+  if (ctx.tone === 'defer' || ctx.tone === 'review') return templateWording(ctx);
   try {
     const text = await provider(ctx);
     return text.trim() || templateWording(ctx);

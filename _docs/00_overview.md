@@ -55,6 +55,7 @@ Two independent folders, each with its own `package.json` and `npm install`. No 
 | 07 | Arrangements, approval, commit | 01, 04, 05, 06 |
 | 08 | Messaging (Photon) | 01, 02, 07 |
 | 09 | Map UI | 01, 02 (API contracts only) |
+| 12 | Agent chat UI (redesigns 09) | 09 |
 | 10 | Observability (Sentry) | 01, hooks in 02, 05, 06 |
 | 11 | Seed, deploy, demo | all |
 

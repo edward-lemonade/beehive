@@ -129,13 +129,13 @@ export async function priceArrangement(arrangement: { id: string; slots: Slot[];
   return { state: 'agreed', links };
 }
 
-export type RepriceResult = { state: 'agreed'; amountCents: number } | { state: 'failed'; reason: string };
+export type RepriceResult = { state: 'agreed'; amountCents: number } | { state: 'pending'; amountCents: number } | { state: 'failed'; reason: string };
 
 // Re-runs one link of a priced arrangement with the others held fixed. `anchor` is the caller's target.
 export async function repriceLink(
   arrangement: { id: string; slots: Slot[]; links: Link[] },
   linkId: string,
-  anchor: { side: 'payer' | 'receiver'; cents: number },
+  anchor: { side: 'payer' | 'receiver'; cents?: number },
   attempt: string,
 ): Promise<RepriceResult> {
   const repo = getIntentRepository();
@@ -163,12 +163,12 @@ export async function repriceLink(
   const receiver = intents.get(target.receiver)!;
   const payerBounds = deriveLinkBounds(partyOf(payer), target, all, priced);
   const receiverBounds = deriveLinkBounds(partyOf(receiver), target, all, priced);
-  if (!withinBounds(anchor.side, anchor.cents, anchor.side === 'payer' ? payerBounds : receiverBounds)) {
+  if (anchor.cents !== undefined && !withinBounds(anchor.side, anchor.cents, anchor.side === 'payer' ? payerBounds : receiverBounds)) {
     return { state: 'failed', reason: 'needs_bound_change' };
   }
-  const bounds = linkBounds(target, payerBounds, receiverBounds, anchor.side === 'payer'
-    ? { payerOpenCents: anchor.cents }
-    : { receiverAskCents: anchor.cents });
+  const bounds = linkBounds(target, payerBounds, receiverBounds, anchor.cents === undefined
+    ? {}
+    : anchor.side === 'payer' ? { payerOpenCents: anchor.cents } : { receiverAskCents: anchor.cents });
   ensureAgent(payer.id);
   ensureAgent(receiver.id);
   const result = await runSession({
@@ -178,6 +178,10 @@ export async function repriceLink(
     receiverId: receiver.id,
     bounds,
   });
+  // The other agent only escalated to its user, so nothing has been agreed yet.
+  if (result.state === 'agreed' && result.amountCents !== undefined && result.pendingUser) {
+    return { state: 'pending', amountCents: result.amountCents };
+  }
   return result.state === 'agreed' && result.amountCents !== undefined
     ? { state: 'agreed', amountCents: result.amountCents }
     : { state: 'failed', reason: result.reason ?? 'no_agreement' };

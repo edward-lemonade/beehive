@@ -1,8 +1,13 @@
+import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+import { requireAuth } from './auth.js';
+import { installSseBridge } from './sse/bridge.js';
 import { config } from './config.js';
-import { events } from './events.js';
 import { sseHub } from './sse/hub.js';
+import { agentRouter } from './agent/routes.js';
+import { channelRouter } from './channel/routes.js';
 import { discoveryRouter } from './discovery/routes.js';
 import { installNegotiation } from './negotiation/session.js';
 import { negotiationRouter } from './negotiation/routes.js';
@@ -15,13 +20,15 @@ import { intentsRouter, publicMapRouter } from './intents/routes.js';
 
 const app = new Hono();
 app.use('*', logger());
+app.use('*', cors({
+  origin: (origin) => (config.FRONTEND_ORIGIN === '*' ? origin : config.FRONTEND_ORIGIN),
+  allowHeaders: ['Authorization', 'Content-Type'],
+  allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+}));
 
 app.get('/health', (c) => c.json({ ok: true, status: 'healthy', timeScale: config.TIME_SCALE }));
 
-app.get('/stream', (c) => {
-  const userId = c.req.header('x-user-id') ?? 'demo-user';
-  return sseHub.streamForUser(userId);
-});
+app.get('/stream', requireAuth, (c) => sseHub.streamForUser(c.get('user').id, c.req.raw.signal));
 
 app.route('/intents', intentsRouter);
 app.route('/intents', discoveryRouter);
@@ -29,8 +36,11 @@ app.route('/intents', runtimeRouter);
 app.route('/negotiate', negotiationRouter);
 app.route('/arrangements', arrangementsRouter);
 app.route('/map', publicMapRouter);
+app.route('/me', channelRouter);
+app.route('/agent', agentRouter);
 
 installNegotiation();
+installSseBridge();
 
 if (!process.env.VITEST) {
   startDiscovery();
@@ -43,6 +53,9 @@ app.onError((err, c) => c.json({ ok: false, error: err instanceof Error ? err.me
 
 app.notFound((c) => c.json({ ok: false, error: 'Not found' }, 404));
 
-events.emit('notify', { userId: 'demo-user', kind: 'health-check', payload: { ok: true } });
+if (!process.env.VITEST) {
+  const port = Number(process.env.PORT ?? 3000);
+  serve({ fetch: app.fetch, port }, () => console.log(`API listening on :${port}`));
+}
 
 export default app;

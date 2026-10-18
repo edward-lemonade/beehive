@@ -4,6 +4,7 @@ import { events } from '../events.js';
 import { getIntentRepository } from '../intents/service.js';
 import type { StoredIntent } from '../intents/repository.js';
 import { nearMissBetween, directlyRelevant } from './match.js';
+import { primePairs } from './semantic.js';
 import { noticeRepository, type Notice, type NoticeRepository } from './notices.js';
 
 const COALESCE_MS = 250;
@@ -36,13 +37,14 @@ export async function refreshEdges(intentId: string): Promise<RelevantEdge[]> {
 
   const [neighbors, existing] = await Promise.all([neighborsOf(self), notices.forObserver(intentId)]);
   const known = new Map(existing.map((n) => [n.intent, n]));
+  await primePairs(self.public, neighbors.map((o) => o.public));
   const now = clock.now();
   const writes: Notice[] = [];
   let changed = false;
 
   for (const other of neighbors) {
     const prior = known.get(other.id);
-    if (prior && prior.version === other.version && prior.observerVersion === self.version) continue;
+    if (prior && prior.relevant && prior.version === other.version && prior.observerVersion === self.version) continue;
     const edge = directlyRelevant(self.public, other.public);
     writes.push({
       observer: self.id,
@@ -112,6 +114,7 @@ export async function relevantTo(callerId: string, publicIntentId: string): Prom
   const target = await repo.get(publicIntentId);
   if (!target || target.state !== 'open' || target.ownerId === callerId) return null;
   const mine = (await repo.listMine(callerId)).filter((intent) => intent.state === 'open');
+  for (const intent of mine) await primePairs(intent.public, [target.public]);
   const hit = mine.find((intent) => directlyRelevant(intent.public, target.public) !== null);
   return hit?.id ?? null;
 }

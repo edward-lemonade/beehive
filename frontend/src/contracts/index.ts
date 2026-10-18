@@ -35,6 +35,7 @@ export const intentPublicSchema = z.object({
   intentId: z.string(),
   version: z.number().int().nonnegative(),
   ownerHandle: z.string(),
+  ownerImageUrl: z.string().nullable().optional(),
   tier: z.string(),
   give: z.array(itemSchema),
   want: z.array(wantItemSchema),

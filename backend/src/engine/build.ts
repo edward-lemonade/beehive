@@ -1,5 +1,6 @@
 import type { IntentPublic, Item, Link, RelevantEdge, Slot } from '../contracts/index.js';
-import { canon, normText, slotsOf, type SlotInfo } from './slots.js';
+import { canon, slotsOf, type SlotInfo } from './slots.js';
+import { labelsMatch } from '../discovery/match.js';
 import { BudgetMeter, type ArrangementDraft, type Budget, type Id } from './types.js';
 
 export function arrangementKey(slots: Array<{ intentId: Id; intentVersion: number }>): string {
@@ -49,7 +50,7 @@ function got(state: State, wanter: Id, slot: string): number {
 }
 
 function optionQty(options: Item[], given: Item): number {
-  const match = options.find((o) => o.kind === given.kind && normText(o.label) === normText(given.label));
+  const match = options.find((o) => o.kind === given.kind && labelsMatch(o.label, given.label));
   return (match ?? options[0]!).qty;
 }
 

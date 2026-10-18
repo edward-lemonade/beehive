@@ -10,7 +10,18 @@ export type EventMap = {
   'arrangement.committed': { arrangementId: string };
   'arrangement.dissolved': { arrangementId: string; reason?: string };
   'slot.vacated': { arrangementId: string; intentId: string };
-  'negotiation.round': { arrangementId?: string; linkId?: string; round: number };
+  'negotiation.round': {
+    arrangementId?: string;
+    linkId?: string;
+    round: number;
+    fromIntentId?: string;
+    toIntentId?: string;
+    kind?: 'offer' | 'accept' | 'walk' | 'say';
+    amountCents?: number | null;
+    text?: string | null;
+  };
+  /** An agent reached a price its user never authorised and needs the user's decision. */
+  'negotiation.awaiting_user': { arrangementId?: string; linkId: string; intentId: string; counterpartIntentId: string; amountCents: number; side?: 'payer' | 'receiver' };
   notify: { userId: string; kind: string; payload?: Record<string, unknown> };
 };
 

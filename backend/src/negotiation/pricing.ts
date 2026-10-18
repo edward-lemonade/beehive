@@ -1,9 +1,12 @@
 import type { Link } from '../contracts/index.js';
 
-export type Bounds = { minCents: number; maxCents: number };
+/** floorStated: the user gave a real floor (or a firm price). Otherwise the price is only an ask and the user decides. */
+export type Bounds = { minCents: number; maxCents: number; floorStated?: boolean };
 export type Side = 'payer' | 'receiver';
 
 export const UNBOUNDED = Number.MAX_SAFE_INTEGER;
+// A buyer who named no price never gets a number made up for them: the agent starts at the seller's ask and the user decides.
+const NEGOTIABLE_OPEN_SHARE = 1;
 
 export type Party = { id: string; minNetCents: number | null; declaredNetCents: number | null };
 
@@ -23,6 +26,10 @@ export type LinkBounds = {
   receiver: Bounds;
   payerOpenCents: number;
   receiverAskCents: number;
+  /** The payer never stated a price, so any deal above its opening is left for its user to confirm. */
+  payerNegotiable?: boolean;
+  /** The payer's user named this price, so the receiver's agent answers it or asks its own user instead of haggling. */
+  directed?: boolean;
 };
 
 export type SessionState = {
@@ -39,6 +46,8 @@ export type LinkResult = {
   amountCents?: number;
   rounds: number;
   reason?: string;
+  /** The price is the counterpart's ask, and the payer's user has not yet confirmed it. */
+  pendingUser?: boolean;
 };
 
 export function withinBounds(side: Side, amountCents: number, bounds: Bounds): boolean {
@@ -84,7 +93,9 @@ export function deriveLinkBounds(
   }
   let minCents = limit === null ? 0 : Math.max(0, limit - net);
   if (target.receiverFirm && target.askCents !== null) minCents = Math.max(minCents, target.askCents);
-  return { minCents, maxCents: UNBOUNDED };
+  const floorStated = (target.receiverFirm && target.askCents !== null)
+    || (party.minNetCents !== null && party.minNetCents !== party.declaredNetCents);
+  return { minCents, maxCents: UNBOUNDED, floorStated };
 }
 
 export function linkBounds(
@@ -93,13 +104,21 @@ export function linkBounds(
   receiverBounds: Bounds,
   anchors: { payerOpenCents?: number; receiverAskCents?: number } = {},
 ): LinkBounds {
-  const open = target.payerFirm ? payerBounds.maxCents : (anchors.payerOpenCents ?? target.payCents ?? 0);
   const ask = target.receiverFirm ? receiverBounds.minCents : (anchors.receiverAskCents ?? target.askCents ?? receiverBounds.minCents);
+  // A payer with no stated price opens at a share of the ask and never pays more than the ask.
+  const unstated = target.payCents === null && !target.payerFirm && ask > 0;
+  const negotiable = unstated && anchors.payerOpenCents === undefined;
+  const payer = unstated && payerBounds.maxCents > ask ? { ...payerBounds, maxCents: ask } : payerBounds;
+  const open = target.payerFirm
+    ? payer.maxCents
+    : (anchors.payerOpenCents ?? target.payCents ?? (negotiable ? Math.round(ask * NEGOTIABLE_OPEN_SHARE) : 0));
   return {
-    payer: payerBounds,
+    payer,
     receiver: receiverBounds,
-    payerOpenCents: Math.max(0, Math.min(open, payerBounds.maxCents)),
+    payerOpenCents: Math.max(0, Math.min(open, payer.maxCents)),
     receiverAskCents: Math.max(ask, receiverBounds.minCents),
+    payerNegotiable: unstated && anchors.payerOpenCents === undefined,
+    directed: anchors.payerOpenCents !== undefined,
   };
 }
 

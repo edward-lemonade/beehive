@@ -23,6 +23,8 @@ export interface ArrangementRepository {
   countRequested(userId: string): Promise<number>;
   addDecline(userId: string, key: string, at: number): Promise<void>;
   isDeclined(userId: string, key: string): Promise<boolean>;
+  /** Forgets declines and dropped candidates that involve this intent so they can be proposed again. */
+  revive(intentId: string): Promise<void>;
   commit(args: CommitArgs): Promise<CommitResult>;
 }
 
@@ -193,6 +195,12 @@ export class PostgresArrangementRepository implements ArrangementRepository {
       ON CONFLICT DO NOTHING`;
   }
 
+  async revive(intentId: string): Promise<void> {
+    const pattern = `%${intentId}@%`;
+    await sql`DELETE FROM declined WHERE arrangement_key LIKE ${pattern}`;
+    await sql`UPDATE arrangements SET state = 'dissolved', reason = 'revived' WHERE state = 'dropped' AND key LIKE ${pattern}`;
+  }
+
   async isDeclined(userId: string, key: string): Promise<boolean> {
     const rows = await sql`SELECT 1 FROM declined WHERE user_id = ${userId} AND arrangement_key = ${key}`;
     return rows.length > 0;
@@ -307,6 +315,16 @@ export class MemoryArrangementRepository implements ArrangementRepository {
 
   async addDecline(userId: string, key: string): Promise<void> {
     this.declines.add(`${userId}|${key}`);
+  }
+
+  async revive(intentId: string): Promise<void> {
+    for (const entry of [...this.declines]) if (entry.slice(entry.indexOf('|') + 1).includes(`${intentId}@`)) this.declines.delete(entry);
+    for (const row of this.rows.values()) {
+      if (row.state === 'dropped' && row.key.includes(`${intentId}@`)) {
+        row.state = 'dissolved';
+        row.reason = 'revived';
+      }
+    }
   }
 
   async isDeclined(userId: string, key: string): Promise<boolean> {

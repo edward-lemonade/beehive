@@ -1,8 +1,37 @@
+import { hasAlias, pairVerdict } from './semantic.js';
 import type { Flow, EdgeCover, IntentPublic, Item, NearMiss, RelevantEdge, WantItem } from '../contracts/index.js';
 
 export type MatchResult = 'match' | 'dates' | 'none';
 
 const norm = (value: string | number): string => String(value).trim().toLowerCase();
+
+const words = (label: string): string[] => norm(label).split(/[^a-z0-9]+/).filter(Boolean);
+
+function sameWord(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (a.length < 5 || b.length < 5 || Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    if (++edits > 1) return false;
+    if (a.length > b.length) i++;
+    else if (b.length > a.length) j++;
+    else { i++; j++; }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
+// Labels are LLM-written, so "ticket" and "niteharts-saturday-ticket" must still match: one side's words are all in the other.
+export function labelsMatch(a: string, b: string): boolean {
+  if (hasAlias(a, b)) return true;
+  const x = words(a);
+  const y = words(b);
+  if (x.length === 0 || y.length === 0) return norm(a) === norm(b);
+  const [small, big] = x.length <= y.length ? [x, y] : [y, x];
+  return small.every((w) => big.some((v) => sameWord(w, v)));
+}
 
 function rangeOf(item: Item): [string, string] | null {
   const start = item.attrs.dateStart;
@@ -13,7 +42,7 @@ function rangeOf(item: Item): [string, string] | null {
 
 function matchDetail(given: Item, wanted: Item): MatchResult {
   if (given.kind === 'cash' || wanted.kind === 'cash') return 'none';
-  if (given.kind !== wanted.kind || norm(given.label) !== norm(wanted.label)) return 'none';
+  if (given.kind !== wanted.kind || !labelsMatch(given.label, wanted.label)) return 'none';
   if (given.qty < wanted.qty) return 'none';
 
   let datesFail = false;
@@ -54,10 +83,19 @@ export function itemMatch(given: Item, wanted: WantItem | Item): boolean {
   return itemMatchDetail(given, wanted) === 'match';
 }
 
+// An LLM verdict on the pair (from the listings' own words) overrides the label comparison.
+function agree(given: Item, wanted: WantItem | Item, verdict: boolean | undefined): boolean {
+  if (verdict === undefined) return itemMatch(given, wanted);
+  if (!verdict) return false;
+  const options = 'anyOf' in wanted ? wanted.anyOf : [wanted];
+  return options.some((o) => o.kind === given.kind && o.kind !== 'cash' && itemMatch(given, { ...o, label: given.label }));
+}
+
 function coversFor(wanter: IntentPublic, giver: IntentPublic): EdgeCover[] {
   const covers: EdgeCover[] = [];
+  const verdict = pairVerdict(wanter, giver);
   wanter.want.forEach((slot, index) => {
-    const item = giver.give.find((candidate) => itemMatch(candidate, slot));
+    const item = giver.give.find((candidate) => agree(candidate, slot, verdict));
     if (item) covers.push({ slot: `w${index}`, provider: giver.intentId, item });
   });
   return covers;
@@ -65,8 +103,9 @@ function coversFor(wanter: IntentPublic, giver: IntentPublic): EdgeCover[] {
 
 function flowsFor(giver: IntentPublic, wanter: IntentPublic): Flow[] {
   const flows: Flow[] = [];
+  const verdict = pairVerdict(wanter, giver);
   for (const item of giver.give) {
-    if (wanter.want.some((slot) => itemMatch(item, slot))) {
+    if (wanter.want.some((slot) => agree(item, slot, verdict))) {
       flows.push({ from: giver.intentId, to: wanter.intentId, item });
     }
   }

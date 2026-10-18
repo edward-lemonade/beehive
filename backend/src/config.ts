@@ -18,6 +18,7 @@ const envSchema = z.object({
   BUS_LOG_CONTENT: z.enum(['true', 'false']).optional(),
   NEGOTIATION_ROUNDS: z.coerce.number().default(3),
   VITE_API_URL: z.string().optional(),
+  FRONTEND_ORIGIN: z.string().default('*'),
   VITE_CLERK_PUBLISHABLE_KEY: z.string().optional(),
   VITE_SENTRY_DSN: z.string().optional(),
 }).superRefine((values, context) => {

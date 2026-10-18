@@ -2,6 +2,8 @@
 
 **Spec:** 6.15, G16, A8. **Depends on:** 01, 02, 07. **Feeds:** the demo's main interface (and the Photon challenge).
 
+> **Channel toggle:** SMS is opt-in. A user is on either the app chat or SMS, never both, and needs a verified phone to choose SMS. Outbound and inbound checks below apply only while the user's channel is `sms`. See [12_agent_chat_ui.md](12_agent_chat_ui.md).
+
 Goal: users create intents, answer questions, approve, and receive contacts by text. The channel sits behind an adapter so everything else runs against a terminal adapter in development.
 
 ## Components (`messaging/`)
