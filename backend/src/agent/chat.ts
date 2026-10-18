@@ -1,11 +1,15 @@
 import { arrangementRepo } from '../arrangements/repository.js';
 import { approve, decline, listMine as listMineArrangements, negotiateFurther, retract } from '../arrangements/service.js';
-import { config } from '../config.js';
 import type { TermsView } from '../contracts/index.js';
 import { events } from '../events.js';
 import { confirmDraft, createDraft, getIntentRepository, listMine, listPublicIntents, setStandingLimit } from '../intents/service.js';
 import { negotiationLog } from '../negotiation/log.js';
 import { negotiateDirect } from '../negotiation/service.js';
+import { recordChatEval } from '../observability/evals.js';
+import { chatCompletion, providerName, stripFences } from '../observability/llm.js';
+import { canaryInstruction, detectPromptLeak, reportInjection, scanForInjection } from '../observability/security.js';
+import { Sentry, metric } from '../observability/telemetry.js';
+import { config } from '../config.js';
 import { ensureAgent, scheduler } from '../runtime/registry.js';
 
 export type ChatTurn = { from: 'agent' | 'me'; text: string };
@@ -24,24 +28,16 @@ type LlmMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 export type Completer = (messages: LlmMessage[]) => Promise<string>;
 
 const MAX_STEPS = 4;
+const AGENT_NAME = 'trade-agent-chat';
+// Tool results that mean a guardrail refused what the model tried to do; the graders count these as misbehaviour.
+const BLOCKED_RESULT = /^(Not approved\.|No such pending arrangement|Approvals can only follow|Listings can only be posted|The limit must be|That intent (of the user )?is not open|That is not the user's intent|No listing text was given)/;
+const toolOutcome = (result: string): 'ok' | 'blocked' | 'failed' =>
+  /^Failed:|^Unknown action/.test(result) ? 'failed' : BLOCKED_RESULT.test(result) ? 'blocked' : 'ok';
 const money = (cents: unknown): string => (typeof cents === 'number' ? `$${(cents / 100).toFixed(2).replace(/\.00$/, '')}` : 'unknown');
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n)}…` : s);
 
-export const llmCompleter: Completer = async (messages) => {
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (config.LLM_API_KEY) headers.authorization = `Bearer ${config.LLM_API_KEY}`;
-  const response = await fetch(`${config.LLM_BASE_URL.replace(/\/+$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers,
-    signal: AbortSignal.timeout(30_000),
-    body: JSON.stringify({ model: config.LLM_MODEL_FAST, temperature: 0.5, response_format: { type: 'json_object' }, messages }),
-  });
-  if (!response.ok) throw new Error(`Agent chat request failed with HTTP ${response.status}`);
-  const data = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }> };
-  const content = data.choices?.[0]?.message?.content;
-  if (typeof content !== 'string' || !content.trim()) throw new Error('Agent chat returned an empty response');
-  return content.replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
-};
+export const llmCompleter: Completer = async (messages) =>
+  stripFences(await chatCompletion({ functionId: 'agent.chat', agentName: AGENT_NAME, temperature: 0.5, json: true, timeoutMs: 30_000, messages }));
 
 let completer: Completer = llmCompleter;
 export function setChatCompleter(next?: Completer): void {
@@ -214,11 +210,29 @@ function parseModel(raw: string): { reply: string; action: Action | null } {
 }
 
 export async function runAgentChat(input: AgentChatInput): Promise<AgentChatResult> {
+  return Sentry.startSpan({
+    op: 'gen_ai.invoke_agent',
+    name: `invoke_agent ${AGENT_NAME}`,
+    attributes: {
+      'gen_ai.operation.name': 'invoke_agent',
+      'gen_ai.agent.name': AGENT_NAME,
+      'gen_ai.provider.name': providerName(),
+      'gen_ai.request.model': config.LLM_MODEL_FAST,
+      'gen_ai.conversation.id': input.user.id,
+      'agent.trigger': input.event ? 'event' : 'message',
+      'agent.history_turns': input.history.length,
+    },
+  }, () => runAgentChatTurn(input));
+}
+
+async function runAgentChatTurn(input: AgentChatInput): Promise<AgentChatResult> {
   const { user } = input;
   let changed = false;
 
+  const userInjection = input.message ? reportInjection({ surface: 'chat', text: input.message, userId: user.id }).suspected : false;
   const ctx = await buildContext(user.id);
-  const messages: LlmMessage[] = [{ role: 'system', content: `${SYSTEM}\n\n${renderContext(ctx)}` }];
+  const flaggedListingsInContext = ctx.others.filter((o) => scanForInjection(o.text).suspected).length;
+  const messages: LlmMessage[] = [{ role: 'system', content: `${SYSTEM}\n${canaryInstruction}\n\n${renderContext(ctx)}` }];
   for (const turn of input.history.slice(-16)) {
     messages.push({ role: turn.from === 'me' ? 'user' : 'assistant', content: turn.from === 'me' ? turn.text : JSON.stringify({ reply: turn.text, action: null }) });
   }
@@ -322,17 +336,57 @@ export async function runAgentChat(input: AgentChatInput): Promise<AgentChatResu
     }
   }
 
+  // Model and tool spans are siblings under invoke_agent, per Sentry's agent-monitoring conventions.
+  const executeTool = (action: Action): Promise<string> =>
+    Sentry.startSpan({
+      op: 'gen_ai.execute_tool',
+      name: `execute_tool ${action.type}`,
+      attributes: { 'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.name': action.type, 'gen_ai.tool.type': 'function', 'gen_ai.agent.name': AGENT_NAME },
+    }, async (span) => {
+      const result = await execute(action);
+      const outcome = toolOutcome(result);
+      span.setAttribute('tool.outcome', outcome);
+      if (outcome !== 'ok') span.setStatus({ code: 2, message: outcome });
+      metric.count('agent.tool_call', { tool: action.type, outcome });
+      return result;
+    });
+
   let reply = '';
+  let hitMaxSteps = false;
+  const actions: string[] = [];
+  const toolOutcomes: Array<'ok' | 'blocked' | 'failed'> = [];
   for (let step = 0; step < MAX_STEPS; step++) {
     const raw = await completer(messages);
-    const out = parseModel(raw);
+    let out: ReturnType<typeof parseModel>;
+    try {
+      out = parseModel(raw);
+    } catch (error) {
+      metric.count('agent.eval.grade', { grader: 'valid_json', result: 'fail' });
+      throw error;
+    }
     if (!out.action || step === MAX_STEPS - 1) {
+      hitMaxSteps = Boolean(out.action);
       reply = out.reply;
       break;
     }
-    const result = await execute(out.action);
+    actions.push(out.action.type);
+    const result = await executeTool(out.action);
+    toolOutcomes.push(toolOutcome(result));
     messages.push({ role: 'assistant', content: raw }, { role: 'user', content: `TOOL RESULT: ${result}` });
   }
   if (!reply) throw new Error('Agent produced no reply');
+
+  const promptLeak = detectPromptLeak(reply, 'agent.chat', user.id);
+  recordChatEval({
+    reply,
+    groundingText: messages.map((m) => m.content).join('\n'),
+    actions,
+    toolOutcomes,
+    hitMaxSteps,
+    promptLeak,
+    userInjection,
+    flaggedListingsInContext,
+  }, { trigger: input.event ? 'event' : 'message', userId: user.id });
+  if (promptLeak) reply = "Sorry, I can't share that. Want me to keep looking for trades instead?";
   return { reply, draft: null, changed };
 }

@@ -176,7 +176,8 @@ async function dispatchRequests(arr: StoredArrangement, opened: StoredSlot[]): P
     const intent = intents.get(slot.intentId);
     if (!intent) continue;
     const floor = intent.private.minNetCents;
-    if (intent.private.autoApprove && floor != null && !arr.proposal && !arr.links.some((l) => l.payer && l.amountCents === null) && netFor(arr, slot.intentId) >= floor) {
+    const ownLinksPriced = !arr.links.some((l) => (l.a === slot.intentId || l.b === slot.intentId) && l.payer && l.amountCents === null);
+    if (intent.private.autoApprove && floor != null && !arr.proposal && ownLinksPriced && netFor(arr, slot.intentId) >= floor) {
       // The user gave a standing limit, so a deal at or above it is approved without asking.
       const { userId } = slot;
       setImmediate(() => { approve(userId, arr.id).catch(() => {}); });
@@ -521,13 +522,15 @@ async function approveSlotLocked(arr: StoredArrangement, slot: StoredSlot): Prom
     if (slot.approval === 'queued') throw new ArrangementError('This arrangement is waiting for your other pending approvals', 409);
     if (slot.approval !== 'requested') throw notProposed();
 
-    if (arr.links.some((l) => l.payer && l.amountCents === null)) {
+    // Only this user's own links must be priced. An unpriced link between two other people blocks their approvals,
+    // and commit needs every slot, so nothing can commit unpriced.
+    const mine = arr.links.filter((l) => l.a === slot.intentId || l.b === slot.intentId);
+    if (mine.some((l) => l.payer && l.amountCents === null)) {
       throw new ArrangementError('A price has not been set yet, so there is nothing to approve', 409);
     }
     if (!(await contactsFor([slot.userId])).get(slot.userId)) {
       throw new ArrangementError('Add a public contact in your profile before approving a deal', 409);
     }
-    const mine = arr.links.filter((l) => l.a === slot.intentId || l.b === slot.intentId);
     const check = await ensureAgent(slot.intentId).precheck({
       intentVersion: slot.intentVersion,
       netCents: netFor(arr, slot.intentId),

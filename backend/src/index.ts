@@ -19,16 +19,33 @@ import { arrangementsRouter } from './arrangements/routes.js';
 import { startCoordinator } from './arrangements/coordinator.js';
 import { startDiscovery } from './discovery/service.js';
 import { intentsRouter, publicMapRouter } from './intents/routes.js';
+import { sentry } from '@sentry/hono/node';
+import { sql } from './db/index.js';
+import { demoRouter } from './observability/demo.js';
+import { installMonitors } from './observability/monitors.js';
+import { Sentry } from './observability/telemetry.js';
 
 const app = new Hono();
+// Sentry.init runs in src/instrument.ts (loaded with --import); this only instruments requests.
+app.use(sentry(app));
+
 app.use('*', logger());
 app.use('*', cors({
   origin: (origin) => (config.FRONTEND_ORIGIN === '*' ? origin : config.FRONTEND_ORIGIN),
-  allowHeaders: ['Authorization', 'Content-Type'],
+  // sentry-trace and baggage let a browser click and the agents it wakes share one distributed trace.
+  allowHeaders: ['Authorization', 'Content-Type', 'sentry-trace', 'baggage'],
   allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
 }));
 
-app.get('/health', (c) => c.json({ ok: true, status: 'healthy', timeScale: config.TIME_SCALE }));
+// Sentry Uptime polls this, so it checks the database too, not just that the process answers.
+app.get('/health', async (c) => {
+  try {
+    await sql`select 1`;
+    return c.json({ ok: true, status: 'healthy', timeScale: config.TIME_SCALE });
+  } catch {
+    return c.json({ ok: false, status: 'database_unreachable' }, 503);
+  }
+});
 
 app.get('/stream', requireAuth, (c) => sseHub.streamForUser(c.get('user').id, c.req.raw.signal));
 
@@ -42,8 +59,10 @@ app.route('/me', channelRouter);
 app.route('/me', contactRouter);
 app.route('/agent', agentRouter);
 app.route('/dev', seedRouter);
+if (config.DEMO_MODE) app.route('/demo', demoRouter);
 
 installNegotiation();
+installMonitors();
 installSseBridge();
 
 if (!process.env.VITEST) {
@@ -53,7 +72,10 @@ if (!process.env.VITEST) {
     .catch((error) => console.error('runtime failed to start', error));
 }
 
-app.onError((err, c) => c.json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' }, 500));
+app.onError((err, c) => {
+  Sentry.captureException(err);
+  return c.json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' }, 500);
+});
 
 app.notFound((c) => c.json({ ok: false, error: 'Not found' }, 404));
 

@@ -1,4 +1,4 @@
-import { config } from '../config.js';
+import { LlmProviderError, chatCompletion, stripFences } from '../observability/llm.js';
 import { parsedIntentSchema } from '../contracts/index.js';
 import type { Item, ParsedIntent } from './types.js';
 
@@ -192,36 +192,18 @@ export async function parseIntent(rawText: string): Promise<ParsedIntent> {
 }
 
 async function parseWithLLM(rawText: string): Promise<ParsedIntent> {
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (config.LLM_API_KEY) headers.authorization = `Bearer ${config.LLM_API_KEY}`;
-
-  const response = await fetch(`${config.LLM_BASE_URL.replace(/\/+$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model: config.LLM_MODEL_FAST,
-      temperature: 0,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: rawText },
-      ],
-    }),
+  const content = await chatCompletion({
+    functionId: PARSE_FUNCTION_ID,
+    agentName: 'intent-parser',
+    temperature: 0,
+    json: true,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: rawText },
+    ],
   }).catch((error: unknown) => {
-    throw new ProviderError(`Intent parser request failed: ${error instanceof Error ? error.message : 'network error'}`);
-  });
-
-  if (!response.ok) {
-    throw new ProviderError(`Intent parser request failed with HTTP ${response.status}`);
-  }
-  return withNegotiablePrice(parsedIntentSchema.parse(JSON.parse(extractMessageContent(await response.json()))));
-}
-
-function extractMessageContent(response: unknown): string {
-  const content = (response as { choices?: Array<{ message?: { content?: unknown } }> } | null)
-    ?.choices?.[0]?.message?.content;
-  if (typeof content !== 'string' || content.trim().length === 0) {
+    if (error instanceof LlmProviderError) throw new ProviderError(error.message);
     throw new Error('Intent parser returned an invalid response envelope');
-  }
-  return content.replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
+  });
+  return withNegotiablePrice(parsedIntentSchema.parse(JSON.parse(stripFences(content))));
 }

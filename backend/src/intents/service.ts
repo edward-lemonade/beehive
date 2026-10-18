@@ -4,6 +4,7 @@ import { draftSchema, intentPublicSchema } from '../contracts/index.js';
 import type { IntentPrivate, IntentPublic, IntentState, Item } from '../contracts/index.js';
 import { events } from '../events.js';
 import { config } from '../config.js';
+import { reportInjection } from '../observability/security.js';
 import { parseIntent as parseIntentWithLLM } from './parse.js';
 import type { Draft, ParsedIntent } from './types.js';
 import {
@@ -151,6 +152,8 @@ async function createDraftParsed(
   source: 'sms' | 'web',
 ): Promise<Draft> {
   const parsed = await activeParser(text);
+  // Listing text is later shown to every other user's agent, so this is the main indirect-injection entry point.
+  reportInjection({ surface: 'listing', text, userId, llmFlag: parsed.injectionSuspected });
   const missing = missingFields(parsed);
   const id = randomUUID();
   const expiresAt = clock.now() + DRAFT_LIFETIME_MS;
@@ -296,6 +299,8 @@ async function editIntentPersisted(
   const intent = assertOwner(await activeRepository.get(intentId), userId);
   if (intent.state !== 'open') throw new IntentServiceError('Only open intents can be edited', 409);
   const parsed = await activeParser(text);
+  // Listing text is later shown to every other user's agent, so this is the main indirect-injection entry point.
+  reportInjection({ surface: 'listing', text, userId, llmFlag: parsed.injectionSuspected });
   const missing = missingFields(parsed);
   if (missing.length > 0) throw new IntentServiceError(`Edited intent is incomplete: ${questionFor(missing)}`, 400);
 

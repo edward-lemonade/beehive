@@ -4,6 +4,7 @@ import { useApi } from '../api/context'
 import { pollWhenDown, useLive, type ChatMsg } from '../hooks/liveContext'
 import * as speech from '../lib/agentSpeech'
 import { errorMessage } from '../lib/format'
+import { Sentry, sentryEnabled } from '../lib/sentry'
 import { CommittedDeal } from './Approvals'
 import { ChannelToggle } from './ChannelToggle'
 
@@ -13,7 +14,8 @@ export function AgentChat() {
   const { up, chat, postChat, clearChat } = useLive()
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
-    const endRef = useRef<HTMLDivElement>(null)
+  const [rated, setRated] = useState<Set<number>>(() => new Set())
+  const endRef = useRef<HTMLDivElement>(null)
 
   const arrangements = useQuery({ queryKey: ['arrangements'], queryFn: () => api.arrangements(), refetchInterval: pollWhenDown(up) })
   const channel = useQuery({ queryKey: ['channel'], queryFn: () => api.channel() })
@@ -57,8 +59,10 @@ export function AgentChat() {
   }
 
   const ask = useMutation({
+    // A named root span, so the trace reads "agent chat" from the click through the API, the tools and the LLM.
     mutationFn: (message: string) =>
-      api.agentChat({ message, history: chat.slice(-16).map((m) => ({ from: m.from, text: m.text })) }),
+      Sentry.startSpan({ op: 'ui.action', name: 'agent chat: send message' }, () =>
+        api.agentChat({ message, history: chat.slice(-16).map((m) => ({ from: m.from, text: m.text })) })),
     onSuccess: (r) => {
       say(r.reply)
       if (r.changed) refresh()
@@ -71,6 +75,14 @@ export function AgentChat() {
     setError(null)
     postChat({ from: 'me', text: value })
     ask.mutate(value, { onError: (e) => setError(errorMessage(e)) })
+  }
+
+  // Human eval signal: a thumbs-down becomes Sentry user feedback tied to this session's replay and trace.
+  // The reply text is not attached; the replay and the backend eval tags on the same trace say what went wrong.
+  const flag = (id: number) => {
+    setRated((prev) => new Set(prev).add(id))
+    Sentry.metrics.count('agent.reply_feedback', 1, { attributes: { vote: 'down' } })
+    Sentry.captureFeedback({ message: 'Bad agent reply (thumbs down in chat)', tags: { 'feedback.kind': 'agent_reply', 'gen_ai.agent.name': 'trade-agent-chat' } }, { includeReplay: true })
   }
 
   const busy = ask.isPending
@@ -92,6 +104,11 @@ export function AgentChat() {
           return (
             <div key={m.id} className={`flex flex-col ${m.from === 'me' ? 'items-end' : 'items-start'}`}>
               <p className={`max-w-[85%] break-words rounded-2xl px-3 py-1.5 text-sm ${m.from === 'me' ? 'rounded-br-sm bg-emerald-600 text-white' : 'rounded-bl-sm bg-slate-100 text-slate-900'}`}>{m.text}</p>
+              {sentryEnabled && m.from === 'agent' && (!m.key || m.key.startsWith('ask:')) && (
+                rated.has(m.id)
+                  ? <span className="mt-0.5 text-[11px] text-slate-400">Thanks, flagged for review</span>
+                  : <button onClick={() => flag(m.id)} aria-label="Flag a bad reply" title="Bad reply? Flag it" className="mt-0.5 text-[11px] text-slate-400 hover:text-red-600">👎</button>
+              )}
               {entry && <CommittedDeal entry={entry} />}
             </div>
           )

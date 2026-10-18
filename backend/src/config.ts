@@ -12,6 +12,11 @@ const envSchema = z.object({
   PHOTON_WEBHOOK_SECRET: z.string().optional().default(''),
   CHANNEL: z.enum(['photon', 'terminal']),
   SENTRY_DSN_API: z.string().optional().default(''),
+  SENTRY_ENVIRONMENT: z.string().optional(),
+  SENTRY_RELEASE: z.string().optional(),
+  // Off by default: chat prompts hold the user's private limits and other users' listings.
+  SENTRY_RECORD_LLM_IO: z.enum(['true', 'false']).default('false'),
+  DEMO_MODE: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
   TIME_SCALE: z.coerce.number().default(1),
   SEARCH_BUDGET_EXPANSIONS: z.coerce.number().default(200),
   SEARCH_BUDGET_MS: z.coerce.number().default(5000),

@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import type { BusBody, Envelope } from '../contracts/index.js';
 import { guard, type GuardContext, type Violation } from './guard.js';
 import { runtimeStats } from './metrics.js';
+import { Sentry, continueFrom, traceHeaders } from '../observability/telemetry.js';
 
 export type BusLogEntry = {
   id: string;
@@ -23,7 +24,7 @@ type Handler = (env: Envelope) => void | Promise<void>;
 const LOG_LIMIT = 5000;
 
 export function makeEnvelope(from: string, to: string, body: BusBody): Envelope {
-  return { id: randomUUID(), from, to, sentAt: clock.now(), trace: {}, body };
+  return { id: randomUUID(), from, to, sentAt: clock.now(), trace: traceHeaders(), body };
 }
 
 const logContent = (): boolean =>
@@ -74,7 +75,11 @@ export class Bus {
     if (handler) {
       const previous = this.queues.get(env.to) ?? Promise.resolve();
       const next = previous
-        .then(() => handler(result.envelope))
+        .then(() => continueFrom(env.trace, () => Sentry.startSpan({
+          op: 'agent.receive',
+          name: `receive ${String(env.body?.type)}`,
+          attributes: { 'bus.message_type': String(env.body?.type), 'bus.from': String(env.from), 'bus.to': String(env.to) },
+        }, () => handler(result.envelope))))
         .catch((error) => console.error('bus handler failed', env.to, error));
       this.queues.set(env.to, next);
       void next.finally(() => {

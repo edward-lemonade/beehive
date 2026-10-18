@@ -1,4 +1,4 @@
-import { config } from '../config.js';
+import { chatCompletion } from '../observability/llm.js';
 
 export const WORDING_TIMEOUT_MS = 5000;
 
@@ -27,31 +27,22 @@ export function templateWording(ctx: WordingContext): string {
 
 // Display text only: no decision or number is ever read back from this output.
 export async function llmWording(ctx: WordingContext): Promise<string> {
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (config.LLM_API_KEY) headers.authorization = `Bearer ${config.LLM_API_KEY}`;
-  const response = await fetch(`${config.LLM_BASE_URL.replace(/\/+$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers,
-    signal: AbortSignal.timeout(WORDING_TIMEOUT_MS),
-    body: JSON.stringify({
-      model: config.LLM_MODEL_FAST,
-      temperature: 0.4,
-      messages: [
-        {
-          role: 'system',
-          content: 'Write one short, friendly sentence for a price negotiation message. Mention only the amount given, if any. No other numbers or names.',
-        },
-        {
-          role: 'user',
-          content: `Round ${ctx.round}. Tone: ${ctx.tone}.${ctx.amountCents === null ? '' : ` Amount: ${dollars(ctx.amountCents)}.`}`,
-        },
-      ],
-    }),
+  const text = await chatCompletion({
+    functionId: 'negotiation.wording',
+    agentName: 'negotiator',
+    temperature: 0.4,
+    timeoutMs: WORDING_TIMEOUT_MS,
+    messages: [
+      {
+        role: 'system',
+        content: 'Write one short, friendly sentence for a price negotiation message. Mention only the amount given, if any. No other numbers or names.',
+      },
+      {
+        role: 'user',
+        content: `Round ${ctx.round}. Tone: ${ctx.tone}.${ctx.amountCents === null ? '' : ` Amount: ${dollars(ctx.amountCents)}.`}`,
+      },
+    ],
   });
-  if (!response.ok) throw new Error(`Wording request failed with HTTP ${response.status}`);
-  const data = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }> };
-  const text = data.choices?.[0]?.message?.content;
-  if (typeof text !== 'string' || text.trim().length === 0) throw new Error('Empty wording');
   return text.trim().slice(0, 240);
 }
 

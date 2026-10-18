@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import type { BusBody, Envelope } from '../contracts/index.js';
 import { events } from '../events.js';
 import { bus, makeEnvelope } from '../runtime/bus.js';
+import { BoundsViolationError, reportBoundsViolation, reportNegotiationOutcome } from '../observability/monitors.js';
 import { hooks } from '../runtime/hooks.js';
 import { negotiationLog } from './log.js';
 import {
@@ -37,6 +38,7 @@ class Session {
   private maxRound = 0;
   private readonly rounds: number;
   private readonly timer: ReturnType<typeof setTimeout>;
+  private readonly startedAt = performance.now();
 
   constructor(private readonly opts: SessionOptions) {
     this.rounds = opts.rounds ?? config.NEGOTIATION_ROUNDS;
@@ -74,6 +76,14 @@ class Session {
     this.finished = true;
     clearTimeout(this.timer);
     sessions.delete(this.opts.key);
+    reportNegotiationOutcome({
+      linkId: this.opts.key,
+      state: result.state,
+      reason: result.state === 'failed' ? result.reason : undefined,
+      rounds: result.rounds,
+      pendingUser: result.state === 'agreed' ? result.pendingUser : undefined,
+      durationMs: performance.now() - this.startedAt,
+    });
     this.resolve(result);
   }
 
@@ -82,6 +92,7 @@ class Session {
     this.finished = true;
     clearTimeout(this.timer);
     sessions.delete(this.opts.key);
+    if (error instanceof BoundsViolationError) reportBoundsViolation(error);
     this.reject(error);
   }
 
@@ -106,7 +117,7 @@ class Session {
   // Bounds are enforced here, in code, before anything reaches the guard.
   private async sendMoney(side: Side, kind: 'offer' | 'accept', round: number, amountCents: number, tone: WordingContext['tone']): Promise<boolean> {
     if (!withinBounds(side, amountCents, this.bounds(side))) {
-      throw new Error(`Out-of-bounds ${kind} on ${this.opts.key} (${side})`);
+      throw new BoundsViolationError(`Out-of-bounds ${kind} on ${this.opts.key} (${side})`, this.opts.key, side);
     }
     // The agent says its line first so the conversation reads in order, before the reply it triggers.
     await this.say(side, { round, amountCents, tone });
@@ -175,7 +186,7 @@ class Session {
     }
     if (body.type === 'accept') {
       if (!withinBounds(side, body.amountCents, this.bounds(side))) {
-        throw new Error(`Out-of-bounds accept received on ${this.opts.key}`);
+        throw new BoundsViolationError(`Out-of-bounds accept received on ${this.opts.key}`, this.opts.key, side);
       }
       this.finish({ state: 'agreed', amountCents: body.amountCents, rounds: this.maxRound });
       return;

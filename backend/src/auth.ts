@@ -2,6 +2,7 @@ import { createClerkClient, verifyToken } from '@clerk/backend';
 import type { Context, MiddlewareHandler } from 'hono';
 import { config } from './config.js';
 import { ensureUserForClerkId, syncHandle } from './db/index.js';
+import { Sentry } from './observability/telemetry.js';
 
 export type AuthUser = {
   id: string;
@@ -90,6 +91,9 @@ export const requireAuth = (() => {
       tier: user.tier,
       imageUrl: profile.imageUrl,
     } satisfies AuthUser);
+    // Public handle and internal id only; never the Clerk email or phone.
+    Sentry.setUser({ id: user.id, username: user.handle });
+    Sentry.setTag('user.tier', user.tier);
     await next();
   };
 

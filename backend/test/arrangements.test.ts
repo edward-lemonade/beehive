@@ -186,6 +186,25 @@ describe('end to end', () => {
     await expect(service.approve('udawg', arr.id)).rejects.toThrow(/price has not been set/);
   });
 
+  it('lets a user approve their own priced link while a link between two others is still unpriced, but never commits unpriced', async () => {
+    const plainCash: Item = { kind: 'cash', label: 'cash', attrs: {}, qty: 1 };
+    add('edward', [ticket('sat'), ticket('sun')], [[ticket('three')]], -20000);
+    add('acmm', [plainCash], [[ticket('sat')], [ticket('sun')]], null);
+    add('dawg', [ticket('three')], [[cash(20000)]], 20000);
+    await start('edward', 'acmm', 'dawg');
+    await waitFor(() => byState('proposed').length === 1);
+    const arr = byState('proposed')[0]!;
+    const dawgLink = arr.links.find((l) => l.a === 'dawg' || l.b === 'dawg')!;
+    expect(dawgLink.amountCents).toBe(20000);
+    expect(arr.links.some((l) => l.payer && l.amountCents === null)).toBe(true);
+
+    await service.approve('udawg', arr.id);
+    expect(byState('proposed')[0]!.slots.find((s) => s.intentId === 'dawg')!.approval).toBe('approved');
+    await expect(service.approve('uedward', arr.id)).rejects.toThrow(/price has not been set/);
+    await expect(service.approve('uacmm', arr.id)).rejects.toThrow(/price has not been set/);
+    expect(byState('committed')).toHaveLength(0);
+  });
+
   it('refuses approval from a user with no public contact', async () => {
     chain();
     await start('alice', 'bob', 'carol');

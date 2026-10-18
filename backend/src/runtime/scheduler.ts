@@ -1,3 +1,4 @@
+import { continueFrom, traceHeaders, type TraceHeaders } from '../observability/telemetry.js';
 import type { WakeReason } from './agent.js';
 
 export type WakeRunner = (intentId: string, reasons: ReadonlySet<WakeReason>) => Promise<void>;
@@ -7,6 +8,8 @@ const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setImmedi
 export class Scheduler {
   coalesceMs = 250;
   private pending = new Map<string, Set<WakeReason>>();
+  // The first caller's trace, so a coalesced wake still shows up in the trace that caused it.
+  private origins = new Map<string, TraceHeaders>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private running = new Map<string, Promise<void>>();
   private inflight = new Set<Promise<void>>();
@@ -18,6 +21,7 @@ export class Scheduler {
     const reasons = this.pending.get(intentId) ?? new Set<WakeReason>();
     reasons.add(reason);
     this.pending.set(intentId, reasons);
+    if (!this.origins.has(intentId)) this.origins.set(intentId, traceHeaders());
     if (this.timer) return;
     this.timer = setTimeout(() => {
       this.timer = undefined;
@@ -27,18 +31,20 @@ export class Scheduler {
 
   private async flush(): Promise<void> {
     const batch = [...this.pending];
+    const origins = new Map(this.origins);
     this.pending.clear();
+    this.origins.clear();
     for (const [intentId, reasons] of batch) {
-      this.launch(intentId, reasons);
+      this.launch(intentId, reasons, origins.get(intentId));
       await yieldToEventLoop();
     }
   }
 
   // Wakes for the same intent never overlap; different intents run concurrently.
-  private launch(intentId: string, reasons: ReadonlySet<WakeReason>): void {
+  private launch(intentId: string, reasons: ReadonlySet<WakeReason>, origin?: TraceHeaders): void {
     const previous = this.running.get(intentId) ?? Promise.resolve();
     const next: Promise<void> = previous
-      .then(() => this.run(intentId, reasons))
+      .then(() => continueFrom(origin, () => this.run(intentId, reasons)))
       .catch((error) => console.error('agent wake failed', intentId, error))
       .finally(() => {
         if (this.running.get(intentId) === next) this.running.delete(intentId);
@@ -63,5 +69,6 @@ export class Scheduler {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     this.pending.clear();
+    this.origins.clear();
   }
 }

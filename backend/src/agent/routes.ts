@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { requireAuth } from '../auth.js';
+import { Sentry } from '../observability/telemetry.js';
 import { runAgentChat } from './chat.js';
 import { clearChat, listChat, saveChat } from './messages.js';
 
@@ -18,6 +19,8 @@ agentRouter.post('/chat', async (c) => {
   const parsed = bodySchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ ok: false, error: 'Invalid request body' }, 400);
   const user = c.get('user');
+  // Groups every chat turn of this user into one conversation in Sentry's AI Agents view.
+  Sentry.setConversationId(user.id);
   try {
     const result = await runAgentChat({
       user: { id: user.id, handle: user.handle, tier: user.tier, imageUrl: user.imageUrl },
@@ -29,6 +32,7 @@ agentRouter.post('/chat', async (c) => {
     return c.json({ ok: true, ...result });
   } catch (error) {
     console.warn('Agent chat failed:', error instanceof Error ? error.message : error);
+    Sentry.captureException(error, { tags: { 'gen_ai.agent.name': 'trade-agent-chat' } });
     return c.json({ ok: false, error: 'Your agent could not answer right now. Try again in a moment.' }, 502);
   }
 });

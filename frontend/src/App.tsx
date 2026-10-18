@@ -1,5 +1,6 @@
-import { Show, SignInButton, SignUpButton, UserButton, useAuth } from '@clerk/react'
-import { useMemo } from 'react'
+import { Show, SignInButton, SignUpButton, UserButton, useAuth, useUser } from '@clerk/react'
+import { useEffect, useMemo } from 'react'
+import { Sentry } from './lib/sentry'
 import { ApiContext } from './api/context'
 import { createHttpApi } from './api/client'
 import { createMockApi, isMock } from './api/mock'
@@ -20,6 +21,11 @@ function Shell({ right, children }: { right: React.ReactNode; children: React.Re
 
 function SignedInApp() {
   const { getToken } = useAuth()
+  const { user } = useUser()
+  // Lets a replay or frontend error be found by user; id and username only, never email or phone.
+  useEffect(() => {
+    Sentry.setUser(user ? { id: user.id, username: user.username ?? undefined } : null)
+  }, [user])
   const api = useMemo(() => createHttpApi(() => getToken()), [getToken])
   return (
     <ApiContext.Provider value={api}>

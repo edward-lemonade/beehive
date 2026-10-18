@@ -33,7 +33,7 @@ export async function evaluate(): Promise<number> {
   const signals = await signalRepo().all();
 
   const closed = findClosedSets(intents, signals, edges, searchBudget());
-  noteBudget(closed.budgetExhausted);
+  noteBudget(closed.budgetExhausted, 'closed_sets');
 
   let proposed = 0;
   for (const set of closed.sets) {
@@ -41,7 +41,7 @@ export async function evaluate(): Promise<number> {
     const seen = new Set<string>();
     for (const seed of [...set].sort()) {
       const built = buildArrangement(set, intents, edges, searchBudget(), { seed });
-      noteBudget(built.budgetExhausted);
+      noteBudget(built.budgetExhausted, 'build_arrangement');
       if (!built.draft || seen.has(built.draft.key)) continue;
       seen.add(built.draft.key);
       if (await proposeDraft(built.draft, stored)) proposed += 1;
