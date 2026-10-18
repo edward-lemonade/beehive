@@ -123,15 +123,6 @@ export const termsViewSchema = z.object({
   otherParticipants: z.number().int().nonnegative(),
 });
 
-export const checklistStepSchema = z.object({
-  id: z.string(),
-  kind: z.enum(['give', 'get', 'cash_out', 'cash_in']),
-  counterpartyHandle: z.string(),
-  contact: z.string().nullable(),
-  description: z.string(),
-  done: z.boolean(),
-});
-
 export const arrangementSchema = z.object({
   id: z.string(),
   key: z.string(),
@@ -175,7 +166,6 @@ export type Link = z.infer<typeof linkSchema>;
 export type Slot = z.infer<typeof slotSchema>;
 export type ApprovalState = z.infer<typeof approvalStateSchema>;
 export type TermsView = z.infer<typeof termsViewSchema>;
-export type ChecklistStep = z.infer<typeof checklistStepSchema>;
 export type Arrangement = z.infer<typeof arrangementSchema>;
 export type BusBody = z.infer<typeof busBodySchema>;
 export type Envelope = z.infer<typeof envelopeSchema>;

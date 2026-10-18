@@ -49,7 +49,7 @@ export function priceCameDown(handle: string, cents: number, role: Role): string
   return `${handle} ${verb} it to ${money(cents)}. Want me to try ${money(next)}?`
 }
 
-export const committed = (): string => "It's a deal, you're all set. Use the checklist to finish up."
+export const committed = (): string => "It's a deal. Contact each other directly to finish it off the platform."
 export const dissolved = (): string => 'That arrangement fell through. I will keep looking.'
 export const vacated = (): string => 'Someone dropped out of a deal you are part of. I am looking for a replacement.'
 export const declined = (): string => "Okay, I've passed on that one."

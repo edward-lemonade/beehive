@@ -1,0 +1,1 @@
+ALTER TABLE arrangements ADD COLUMN IF NOT EXISTS proposal JSONB

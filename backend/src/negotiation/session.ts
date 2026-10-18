@@ -116,7 +116,7 @@ class Session {
       return false;
     }
     await this.record(side, round, kind, amountCents, null);
-    await this.say(side, { round, amountCents, tone });
+    // The offer or accept is the message; a spoken line is added only when the agent has something to explain.
     return true;
   }
 
@@ -151,6 +151,10 @@ class Session {
     const b = this.opts.bounds;
     if (b.payer.maxCents < 0 || b.receiver.minCents > b.receiver.maxCents) {
       this.finish({ state: 'failed', rounds: 0, reason: 'infeasible' });
+      return;
+    }
+    if (b.sellerLed) {
+      await this.sendMoney('receiver', 'offer', 1, nextOffer(this.state(1), 'receiver'), 'counter');
       return;
     }
     await this.sendMoney('payer', 'offer', 1, nextOffer(this.state(1), 'payer'), 'open');
@@ -203,7 +207,7 @@ class Session {
     const planned = nextOffer(this.state(round + 1), 'payer');
     const b = this.opts.bounds;
     // No stated price: any counter above the opening is the user's call, so stop haggling and ask.
-    if (b.payerNegotiable && counter > b.payerOpenCents && counter <= b.payer.maxCents) {
+    if (b.payerNegotiable && (b.sellerLed || counter > b.payerOpenCents) && counter <= b.payer.maxCents) {
       await this.askUser('payer', round, counter);
       return;
     }

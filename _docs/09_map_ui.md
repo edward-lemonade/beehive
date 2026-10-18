@@ -41,7 +41,7 @@ src/
 **Approvals panel**
 - Renders the `terms` view from `GET /arrangements/mine`: give/get lines, cash, difference, grade, "includes N other participants you will not deal with," and the response deadline.
 - Buttons: Approve, Decline, Decline and withdraw, Negotiate further.
-- After commit, shows the counterparty contacts and the checklist with tick boxes.
+- After commit, shows the counterparty contacts; the deal then moves off platform.
 
 **Agent feed**
 - Subscribes to `GET /stream`. Shows `negotiation.round` events for the user's own intents ("Offered $55", "Accepted at $50"). Show `say` text as speech lines.

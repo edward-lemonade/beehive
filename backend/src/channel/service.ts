@@ -74,7 +74,7 @@ export function smsTextFor(kind: string, payload: Record<string, unknown>): stri
       return payload.side === 'receiver'
         ? `${who} offered ${dollars(payload.amountCents)}, below your ask. Want to take it? Reply with a price or NO.`
         : `${who} won't go below ${dollars(payload.amountCents)}. What's the most you'd pay? Reply with a price or NO.`;
-    case 'committed': return 'Your arrangement is confirmed. Check the app for the checklist.';
+    case 'committed': return 'Your arrangement is confirmed. Contact details are in the app; finish the exchange directly with them.';
     case 'dissolved': return 'An arrangement you approved fell through.';
     case 'nothing_found': return 'I found nothing yet. Try a better price and I will keep watching.';
     default: return null;

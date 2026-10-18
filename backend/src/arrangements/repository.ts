@@ -6,6 +6,7 @@ import {
   LIVE_STATES,
   type ArrangementState,
   type CommitResult,
+  type PriceProposal,
   type SaveResult,
   type StoredArrangement,
   type StoredSlot,
@@ -38,6 +39,7 @@ type ArrangementRow = {
   reason: string | null;
   excluded: string[];
   declared_net: Record<string, number>;
+  proposal: PriceProposal | null;
   replace_deadline: string | number | bigint | null;
   created_at: string | number | bigint;
   updated_at: string | number | bigint;
@@ -53,7 +55,6 @@ type SlotRow = {
   approved_net_cents: string | number | bigint | null;
   requested_at: string | number | bigint | null;
   decided_at: string | number | bigint | null;
-  checklist: StoredSlot['checklist'];
 };
 
 type LinkRow = {
@@ -85,6 +86,7 @@ export class PostgresArrangementRepository implements ArrangementRepository {
       reason: row.reason,
       excluded: row.excluded,
       declaredNet: row.declared_net,
+      proposal: row.proposal ?? null,
       replaceDeadline: num(row.replace_deadline),
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
@@ -99,7 +101,6 @@ export class PostgresArrangementRepository implements ArrangementRepository {
           approvedNetCents: num(s.approved_net_cents),
           requestedAt: num(s.requested_at),
           decidedAt: num(s.decided_at),
-          checklist: s.checklist,
         })),
       links: links
         .filter((l) => l.arrangement_id === row.id)
@@ -124,21 +125,20 @@ export class PostgresArrangementRepository implements ArrangementRepository {
           return 'stale' as const;
         }
         await tx`
-          INSERT INTO arrangements (id, key, state, revision, reason, excluded, declared_net, replace_deadline, created_at, updated_at)
+          INSERT INTO arrangements (id, key, state, revision, reason, excluded, declared_net, replace_deadline, created_at, updated_at, proposal)
           VALUES (${a.id}, ${a.key}, ${a.state}, ${a.revision}, ${a.reason}, ${JSON.stringify(a.excluded)}::jsonb,
-            ${JSON.stringify(a.declaredNet)}::jsonb, ${a.replaceDeadline}, ${a.createdAt}, ${a.updatedAt})
+            ${JSON.stringify(a.declaredNet)}::jsonb, ${a.replaceDeadline}, ${a.createdAt}, ${a.updatedAt}, ${a.proposal ? JSON.stringify(a.proposal) : null}::jsonb)
           ON CONFLICT (id) DO UPDATE SET key = EXCLUDED.key, state = EXCLUDED.state, revision = EXCLUDED.revision,
             reason = EXCLUDED.reason, excluded = EXCLUDED.excluded, declared_net = EXCLUDED.declared_net,
-            replace_deadline = EXCLUDED.replace_deadline, updated_at = EXCLUDED.updated_at`;
+            replace_deadline = EXCLUDED.replace_deadline, updated_at = EXCLUDED.updated_at, proposal = EXCLUDED.proposal`;
         await tx`DELETE FROM arrangement_slots WHERE arrangement_id = ${a.id}`;
         await tx`DELETE FROM arrangement_links WHERE arrangement_id = ${a.id}`;
         for (const s of a.slots) {
           await tx`
             INSERT INTO arrangement_slots (arrangement_id, intent_id, user_id, intent_version, approval, terms_hash,
-              approved_net_cents, requested_at, decided_at, checklist)
+              approved_net_cents, requested_at, decided_at)
             VALUES (${a.id}, ${s.intentId}, ${s.userId}, ${s.intentVersion}, ${s.approval}, ${s.termsHash},
-              ${s.approvedNetCents}, ${s.requestedAt}, ${s.decidedAt},
-              ${s.checklist === null ? null : JSON.stringify(s.checklist)}::jsonb)`;
+              ${s.approvedNetCents}, ${s.requestedAt}, ${s.decidedAt})`;
         }
         for (const l of a.links) {
           await tx`

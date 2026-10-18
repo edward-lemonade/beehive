@@ -152,19 +152,14 @@ describe('end to end', () => {
     expect(rows()).toHaveLength(1);
   });
 
-  it('S1 checklist lists receives before gives and can be marked done', async () => {
+  it('S1 committed deals expose counterparties to contact', async () => {
     chain();
     await start('alice', 'bob', 'carol');
     await waitFor(() => byState('proposed').length === 1);
     const id = byState('proposed')[0]!.id;
     for (const u of ['ualice', 'ubob', 'ucarol']) await service.approve(u, id);
     const mine = await service.listMine('ubob');
-    const steps = mine[0]!.checklist!;
-    const incoming = steps.map((s) => s.kind === 'get' || s.kind === 'cash_in');
-    expect(incoming).toEqual([...incoming].sort((x, y) => Number(y) - Number(x)));
-    expect(steps.some((s) => s.kind === 'give')).toBe(true);
-    const updated = await service.markStep('ubob', id, steps[0]!.id, true);
-    expect(updated[0]!.done).toBe(true);
+    expect(mine[0]!.contacts!.length).toBeGreaterThan(0);
   });
 
   it('S2: a decline is replaced by a new participant at the old amounts; only they are asked', async () => {
@@ -325,6 +320,44 @@ describe('approvals', () => {
     expect(next.slots.find((s) => s.intentId === 'carol')!.approval).toBe('approved');
     const bad = await service.negotiateFurther('ualice', arr.id, { targetCents: 999999, linkId: 'alice|bob' });
     expect(bad).toMatchObject({ status: 'failed' });
+  });
+
+  it('lets a seller who already approved name a lower price than their listed ask', async () => {
+    chain();
+    await start('alice', 'bob', 'carol');
+    await waitFor(() => byState('proposed').length === 1);
+    const arr = byState('proposed')[0]!;
+    await service.approve('ucarol', arr.id);
+    const result = await service.negotiateFurther('ucarol', arr.id, { targetCents: 4800, linkId: 'bob|carol' });
+    expect(result.status).not.toBe('failed');
+  });
+
+  it('a standing proposal is settled by the other user saying yes, leaving nobody waiting', async () => {
+    chain();
+    await start('alice', 'bob', 'carol');
+    await waitFor(() => byState('proposed').length === 1);
+    const arr = byState('proposed')[0]!;
+    for (const l of arrs.rows.get(arr.id)!.links) if (l.id === 'alice|bob') l.amountCents = 6000;
+    arrs.rows.get(arr.id)!.proposal = { linkId: 'bob|carol', amountCents: 5200, fromIntentId: 'carol' };
+    await service.approve('ubob', arr.id);
+    const next = arrs.rows.get(arr.id)!;
+    expect(next.proposal).toBeNull();
+    expect(next.links.find((l) => l.id === 'bob|carol')!.amountCents).toBe(5200);
+    expect(next.slots.find((s) => s.intentId === 'carol')!.approval).toBe('approved');
+    expect(next.slots.find((s) => s.intentId === 'bob')!.approval).toBe('approved');
+  });
+
+  it('saying no to a proposal drops only that price', async () => {
+    chain();
+    await start('alice', 'bob', 'carol');
+    await waitFor(() => byState('proposed').length === 1);
+    const arr = byState('proposed')[0]!;
+    arrs.rows.get(arr.id)!.proposal = { linkId: 'bob|carol', amountCents: 5200, fromIntentId: 'carol' };
+    await service.decline('ubob', arr.id);
+    const next = arrs.rows.get(arr.id)!;
+    expect(next.proposal).toBeNull();
+    expect(next.state).toBe('proposed');
+    expect(next.slots.find((s) => s.intentId === 'bob')!.approval).not.toBe('declined');
   });
 
   it('hides arrangements from non-participants with a 404', async () => {

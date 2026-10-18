@@ -1,7 +1,6 @@
 import { z } from 'zod'
-import type { ChecklistStep, IntentPublic, NearMiss } from '../contracts'
+import type { IntentPublic, NearMiss } from '../contracts'
 import {
-  checklistStepSchema,
   draftSchema,
   intentPublicSchema,
   mineEntrySchema,
@@ -54,7 +53,6 @@ export type Api = {
   channel(): Promise<ChannelState>
   setChannel(channel: 'app' | 'sms'): Promise<ChannelState>
   setPhone(phone: string): Promise<ChannelState>
-  setStep(id: string, stepId: string, done: boolean): Promise<ChecklistStep[]>
   subscribe(handlers: StreamHandlers): () => void
 }
 
@@ -121,10 +119,6 @@ export function createHttpApi(getToken: TokenGetter, baseUrl = API_URL): Api {
     channel: async () => channelSchema.parse(await request('/me/channel')),
     setChannel: async (channel) => channelSchema.parse(await post('/me/channel', { channel })),
     setPhone: async (phone) => channelSchema.parse(await post('/me/phone', { phone })),
-    setStep: async (id, stepId, done) =>
-      z.array(checklistStepSchema).parse(
-        (await post(`/arrangements/${id}/checklist/${encodeURIComponent(stepId)}/${done ? 'done' : 'undone'}`)).checklist,
-      ),
     subscribe: (handlers) => openStream(`${baseUrl}/stream`, getToken, handlers),
   }
 }

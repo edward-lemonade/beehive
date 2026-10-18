@@ -45,13 +45,3 @@ arrangementsRouter.post('/:id/:action', async (c) => {
     default: return c.json({ ok: false, error: 'Not found' }, 404);
   }
 });
-
-arrangementsRouter.post('/:id/checklist/:stepId/:state', async (c) => {
-  const id = c.req.param('id');
-  const state = c.req.param('state');
-  if (!uuid.test(id)) return c.json({ ok: false, error: 'Arrangement not found' }, 404);
-  if (state !== 'done' && state !== 'undone') return c.json({ ok: false, error: 'Not found' }, 404);
-  return guarded(c, async () => ({
-    checklist: await service.markStep(c.get('user').id, id, decodeURIComponent(c.req.param('stepId')), state === 'done'),
-  }));
-});

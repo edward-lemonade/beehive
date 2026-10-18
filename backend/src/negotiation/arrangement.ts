@@ -1,3 +1,4 @@
+import { negotiationLog } from './log.js';
 import type { IntentPublic, Link, Slot } from '../contracts/index.js';
 import { events } from '../events.js';
 import type { StoredIntent } from '../intents/repository.js';
@@ -162,9 +163,22 @@ export async function repriceLink(
   const payer = intents.get(target.payer)!;
   const receiver = intents.get(target.receiver)!;
   const payerBounds = deriveLinkBounds(partyOf(payer), target, all, priced);
-  const receiverBounds = deriveLinkBounds(partyOf(receiver), target, all, priced);
+  let receiverBounds = deriveLinkBounds(partyOf(receiver), target, all, priced);
+  // A seller naming a price is the user speaking: it replaces the listed ask and becomes a stated floor.
+  if (anchor.side === 'receiver' && anchor.cents !== undefined && anchor.cents >= 0) {
+    receiverBounds = { ...receiverBounds, minCents: anchor.cents, floorStated: true };
+  }
   if (anchor.cents !== undefined && !withinBounds(anchor.side, anchor.cents, anchor.side === 'payer' ? payerBounds : receiverBounds)) {
     return { state: 'failed', reason: 'needs_bound_change' };
+  }
+  // If the other side's latest offer on this arrangement is exactly this price, the user is saying yes to it: settle, don't restart haggling.
+  if (anchor.cents !== undefined) {
+    const mine = anchor.side === 'payer' ? payer.id : receiver.id;
+    const entries = (await negotiationLog().forIntents([mine], 200)).filter((e) => e.arrangementId === arrangement.id && e.kind === 'offer');
+    const latest = entries[entries.length - 1];
+    if (latest && latest.from !== mine && latest.amountCents === anchor.cents) {
+      return { state: 'agreed', amountCents: anchor.cents };
+    }
   }
   const bounds = linkBounds(target, payerBounds, receiverBounds, anchor.cents === undefined
     ? {}

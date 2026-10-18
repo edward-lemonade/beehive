@@ -1,4 +1,4 @@
-# 12 Agent Chat UI (redesign of slice 09)
+The# 12 Agent Chat UI (redesign of slice 09)
 
 **Replaces:** the panel layout in 09 (Composer, Approvals, AgentFeed, Agents tabs). **Depends on:** 02, 03, 06, 07, 09. **Later:** 08 (Photon) reuses the same agent messages over SMS.
 
@@ -20,14 +20,14 @@ Removed from the page: the standalone Composer, Arrangements list, Agents panel 
 Message types, all rendered as chat bubbles (agent on the left, user on the right):
 
 1. **Intent entry.** Any free text the user types becomes a draft. The agent answers like a person, for example "Got it: you're selling a Saturday NiteHarts ticket for $100. Post it?", with Post and Discard buttons. If the parser needs more, the agent asks, and the next message is the answer. No field forms.
-2. **Findings.** When a match exists, the agent says so and embeds the arrangement card with Approve, Decline and a counter box. Pending and committed arrangements are restored from `GET /arrangements/mine` after a reload.
+2. **Findings.** When a match exists, the agent describes it in words (who, what, price) and asks. There are no approval cards or buttons: a clear yes, sure or similar from the user is the approval, a no declines, and naming another price renegotiates. Committed deals show their checklist in the chat. Pending arrangements are re-announced after a reload from `GET /arrangements/mine`.
 3. **Nothing found.** The agent says it found nothing and suggests a price change that helps this side: sellers go lower, buyers offer more. It says it will keep watching.
 4. **Negotiation.** The agent always tries to negotiate with the other agent first.
    - If the other agent does not budge, the agent tells the user "<handle> won't go below $X. That's their final price."
    - If the other agent moves, the agent reports the new price and suggests the next step with a one-tap button: lower for a buyer, higher for a seller, about 10% each time.
    - If the user never gave a price (negotiable), the agent cannot know what they would accept, so it asks: "<handle> wants $X. What's the most you'd pay?" The reply goes to the other agent as a counter.
    - If the counterpart's agent comes back with a price below the user's ask, the agent asks the user whether to accept it.
-5. **Outcomes.** Approved, declined, committed (with the checklist inside the card), dissolved, and a dropped participant each get a short plain message.
+5. **Outcomes.** Approved, declined, committed (the card shows the terms and each counterparty's contact; the platform does not track fulfilment), dissolved, and a dropped participant each get a short plain message.
 
 The agent writes with fixed, friendly templates. An LLM rewrite of the wording is optional later, and no price or decision is ever taken from model text.
 
@@ -57,7 +57,7 @@ No new routes. Small additions only if a gap shows up (for example the intent te
 - The page shows exactly three areas plus the collapsed agent-to-agent icon.
 - Typing "selling saturday niteharts ticket for $100" produces a draft message with Post and Discard, and posting adds the intent to the left column and the right column.
 - Toggling to SMS without a phone prompts linking and stays on chat. With a phone, agent messages move to SMS and the chat shows the banner. Toggling back moves them again, with no duplicates.
-- A match appears in the chat with a working Approve, Decline and counter box. Approving is acknowledged in the chat.
+- A match is put to the user in words. Saying "sure" approves it, and the agent reports whether the deal is committed or waiting on the other side.
 - Asking for a lower price that the other agent refuses gets "final price" from the agent. A price that the other agent accepts gets a follow-up suggestion.
 - A negotiable buyer is asked for a price rather than being told one.
 - No match produces a "found nothing" message with the right-direction price suggestion.
@@ -66,4 +66,4 @@ No new routes. Small additions only if a gap shows up (for example the intent te
 
 ## LLM-backed chat (supersedes template replies)
 
-Free text in the chat goes to `POST /agent/chat` (`backend/src/agent/chat.ts`). The agent sees the user's intents, other users' open listings, pending arrangements and the current draft, then replies in its own words. It may request one action per step: `create_draft`, `answer_draft`, `confirm_draft`, `message_agent`, `negotiate_arrangement`, `keep_looking`. The server executes it (ownership enforced by the services) and feeds back a `TOOL RESULT` for up to 4 steps. Approval is never triggered by free text, only by the card buttons. System events can be passed as `event` so the agent narrates them. Templates in `agentSpeech.ts` remain only for stream-event notices.
+Free text in the chat goes to `POST /agent/chat` (`backend/src/agent/chat.ts`). The agent sees the user's intents, other users' open listings and pending arrangements, then replies in its own words. It may request one action per step: `message_agent`, `negotiate_arrangement`, `approve_arrangement`, `decline_arrangement`, `retract_approval`, `keep_looking`. The server executes it (ownership enforced by the services) and feeds back a `TOOL RESULT` for up to 4 steps. Approval actions run only when the request carries a user message, never for an `event`. The agent cannot create intents; the New intent box does that. System events can be passed as `event` so the agent narrates them.

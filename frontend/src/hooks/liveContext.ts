@@ -81,7 +81,7 @@ export function describe(event: StreamEvent): { text: string; speech: boolean } 
     case 'notify':
       switch (d.kind) {
         case 'approval_request': return { text: 'An arrangement needs your approval', speech: false }
-        case 'committed': return { text: 'Arrangement committed. Check the checklist', speech: false }
+        case 'committed': return { text: 'Arrangement committed. Contact details are in the chat', speech: false }
         case 'needs_user': if (d.side === 'receiver') return { text: `${typeof d.counterpartHandle === 'string' ? d.counterpartHandle : 'Their agent'} offers ${typeof d.amountCents === 'number' ? money(d.amountCents) : 'a lower price'}, below your ask. Your agent needs your call`, speech: false }
           return { text: `${typeof d.counterpartHandle === 'string' ? d.counterpartHandle : 'Their agent'} holds at ${typeof d.amountCents === 'number' ? money(d.amountCents) : 'a price'}. Your agent needs your call`, speech: false }
         case 'dissolved': return { text: 'An arrangement you approved was dissolved', speech: false }

@@ -1,4 +1,4 @@
-import type { ApprovalState, ChecklistStep, Link } from '../contracts/index.js';
+import type { ApprovalState, Link } from '../contracts/index.js';
 
 export type ArrangementState = 'candidate' | 'dropped' | 'proposed' | 'committed' | 'dissolved';
 
@@ -15,8 +15,10 @@ export type StoredSlot = {
   approvedNetCents: number | null;
   requestedAt: number | null;
   decidedAt: number | null;
-  checklist: ChecklistStep[] | null;
 };
+
+/** A price one side has put to the other's user and is waiting on. At most one exists per arrangement. */
+export type PriceProposal = { linkId: string; amountCents: number; fromIntentId: string };
 
 export type StoredArrangement = {
   id: string;
@@ -31,6 +33,7 @@ export type StoredArrangement = {
   updatedAt: number;
   slots: StoredSlot[];
   links: Link[];
+  proposal?: PriceProposal | null;
 };
 
 export type SaveResult = 'ok' | 'key' | 'stale';

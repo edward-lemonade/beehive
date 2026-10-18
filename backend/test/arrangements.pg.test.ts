@@ -91,7 +91,6 @@ describe('postgres commit concurrency', () => {
           approvedNetCents: 0,
           requestedAt: now,
           decidedAt: now,
-          checklist: null,
         })),
       };
       expect(await repo.save(a)).toBe('ok');

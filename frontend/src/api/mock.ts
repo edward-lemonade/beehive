@@ -1,4 +1,4 @@
-import type { ChecklistStep, IntentPublic } from '../contracts'
+import type { IntentPublic } from '../contracts'
 import type { Api } from './client'
 import type { Draft, MineEntry, MyIntent } from './schemas'
 
@@ -45,13 +45,10 @@ const terms: MineEntry = {
     grade: 'exact',
     otherParticipants: 1,
   },
-  checklist: null,
+  contacts: null,
 }
 
 export function createMockApi(): Api {
-  let steps: ChecklistStep[] = [
-    { id: 's1', kind: 'get', counterpartyHandle: 'Otter-1002', contact: '+1 555 0100', description: 'Receive Summer sublet', done: false },
-  ]
   let committed = false
   let sms = false
   let phone = false
@@ -79,7 +76,7 @@ export function createMockApi(): Api {
     negotiate: async () => ({ status: 'agreed', amountCents: 5000, rounds: 2 }),
     arrangements: async () => [
       committed
-        ? { terms: { ...terms.terms, state: 'committed', approval: 'fulfilled' }, checklist: steps }
+        ? { terms: { ...terms.terms, state: 'committed', approval: 'fulfilled' }, contacts: [{ handle: 'Otter-1002', phone: '+1 555 0100' }] }
         : terms,
     ],
     arrangementAction: async (_id, action, body) => {
@@ -96,10 +93,6 @@ export function createMockApi(): Api {
       if (next === 'sms' && !phone) throw new Error('Add a phone number before switching to SMS')
       sms = next === 'sms'
       return { channel: next, phoneLinked: phone, phoneTail: phone ? '0100' : null }
-    },
-    setStep: async (_id, stepId, done) => {
-      steps = steps.map((s) => (s.id === stepId ? { ...s, done } : s))
-      return steps
     },
     subscribe: ({ onStatus }) => {
       onStatus(true)

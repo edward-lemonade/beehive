@@ -3,8 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useApi } from '../api/context'
 import { pollWhenDown, useLive, type ChatMsg } from '../hooks/liveContext'
 import * as speech from '../lib/agentSpeech'
-import { errorMessage, money } from '../lib/format'
-import { ApprovalCard, type CardOutcome } from './Approvals'
+import { errorMessage } from '../lib/format'
+import { CommittedDeal } from './Approvals'
 import { ChannelToggle } from './ChannelToggle'
 
 export function AgentChat() {
@@ -20,18 +20,30 @@ export function AgentChat() {
   const texting = channel.data?.channel === 'sms'
   const entries = arrangements.data
 
-  // Pending and committed arrangements are rebuilt from the API, so a reload brings them back.
+  const announced = useRef(new Set<string>())
   const seed = () => {
+    announced.current.clear()
     postChat({ from: 'agent', text: speech.greeting(), key: 'greeting' })
     for (const e of entries ?? []) {
-      const t = e.terms
-      if (t.approval === 'declined') continue
-      const live = t.state === 'committed' || t.approval === 'requested' || t.approval === 'approved'
-      if (!live) continue
-      postChat({ from: 'agent', text: t.state === 'committed' ? speech.committed() : speech.matchFound(), arrangementId: t.arrangementId, key: `card:${t.arrangementId}` })
+      if (e.terms.state === 'committed' && e.terms.approval !== 'declined') postChat({ from: 'agent', text: speech.committed(), arrangementId: e.terms.arrangementId, key: `card:${e.terms.arrangementId}` })
     }
   }
   useEffect(seed, [entries, postChat])
+
+  // An arrangement waiting on the user is put to them in words, once per price, by the agent.
+  useEffect(() => {
+    for (const e of entries ?? []) {
+      const t = e.terms
+      if (t.state !== 'proposed' || t.approval !== 'requested') continue
+      const price = t.cashOut[0]?.amountCents ?? t.cashIn[0]?.amountCents ?? 0
+      const key = `ask:${t.arrangementId}:${price}`
+      if (announced.current.has(key)) continue
+      announced.current.add(key)
+      api.agentChat({ event: { kind: 'approval_request', arrangementId: t.arrangementId, amountCents: price }, history: chat.slice(-16).map((m) => ({ from: m.from, text: m.text })) })
+        .then((r) => postChat({ from: 'agent', text: r.reply, key }))
+        .catch(() => postChat({ from: 'agent', text: speech.matchFound(), key }))
+    }
+  }, [entries]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: 'end' })
@@ -52,46 +64,6 @@ export function AgentChat() {
       if (r.changed) refresh()
     },
   })
-  const counter = useMutation({
-    mutationFn: ({ arrangementId, cents }: { arrangementId: string; cents: number }) => api.arrangementAction(arrangementId, 'negotiate-further', { targetCents: cents }),
-  })
-
-  const role = (arrangementId: string): speech.Role =>
-    entries?.find((e) => e.terms.arrangementId === arrangementId)?.terms.cashOut.length ? 'payer' : 'receiver'
-  const handleFor = (arrangementId: string): string => {
-    const t = entries?.find((e) => e.terms.arrangementId === arrangementId)?.terms
-    return t?.cashOut[0]?.toHandle ?? t?.cashIn[0]?.fromHandle ?? 'Their agent'
-  }
-
-  const report = (arrangementId: string, targetCents: number | undefined, result: CardOutcome['result']) => {
-    const handle = handleFor(arrangementId)
-    if (result.status === 'pending') {
-      say(speech.askedThem(handle, result.amountCents ?? targetCents))
-    } else if (result.status === 'failed') {
-      say(result.reason === 'no_overlap' || result.reason === 'no_agreement' ? speech.priceFinal(handle, targetCents) : speech.couldNotChange())
-    } else if (result.status === 'agreed' && result.amountCents !== undefined) {
-      const r = role(arrangementId)
-      say(speech.priceCameDown(handle, result.amountCents, r), { suggest: { arrangementId, cents: speech.nextSuggestion(result.amountCents, r) } })
-    } else {
-      say(speech.negotiating(handle))
-    }
-  }
-
-  const onOutcome = (arrangementId: string) => ({ action, targetCents, result }: CardOutcome) => {
-    if (action === 'approve') postChat({ from: 'me', text: 'Approve it.' })
-    else if (action === 'decline' || action === 'decline-withdraw') { postChat({ from: 'me', text: 'Decline.' }); say(speech.declined()) }
-    else if (action === 'retract') { postChat({ from: 'me', text: 'Retract my approval.' }); say(speech.retracted()) }
-    else {
-      postChat({ from: 'me', text: targetCents !== undefined ? `Could you do ${money(targetCents)}?` : 'Keep negotiating.' })
-      report(arrangementId, targetCents, result)
-    }
-  }
-
-  const trySuggestion = (arrangementId: string, cents: number) => {
-    postChat({ from: 'me', text: `Try ${money(cents)}.` })
-    counter.mutate({ arrangementId, cents }, { onSuccess: (r) => report(arrangementId, cents, r), onError: (e) => setError(errorMessage(e)) })
-  }
-
   const submit = () => {
     const value = text.trim()
     if (!value || texting) return
@@ -101,7 +73,7 @@ export function AgentChat() {
     ask.mutate(value, { onError: (e) => setError(errorMessage(e)) })
   }
 
-  const busy = ask.isPending || counter.isPending
+  const busy = ask.isPending
   const failure = error
 
   return (
@@ -115,20 +87,11 @@ export function AgentChat() {
       </header>
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3" role="log" aria-live="polite">
         {chat.map((m) => {
-          const entry = m.arrangementId && m.key?.startsWith('card:') ? entries?.find((e) => e.terms.arrangementId === m.arrangementId && e.terms.approval !== 'declined') : undefined
+          const entry = m.arrangementId && m.key?.startsWith('card:') ? entries?.find((e) => e.terms.arrangementId === m.arrangementId && e.terms.approval !== 'declined' && e.terms.state === 'committed') : undefined
           return (
             <div key={m.id} className={`flex flex-col ${m.from === 'me' ? 'items-end' : 'items-start'}`}>
               <p className={`max-w-[85%] break-words rounded-2xl px-3 py-1.5 text-sm ${m.from === 'me' ? 'rounded-br-sm bg-emerald-600 text-white' : 'rounded-bl-sm bg-slate-100 text-slate-900'}`}>{m.text}</p>
-              {entry && (
-                <ul className="mt-2 w-full max-w-[95%]">
-                  <ApprovalCard entry={entry} onOutcome={onOutcome(entry.terms.arrangementId)} />
-                </ul>
-              )}
-              {m.suggest && (
-                <button disabled={busy} onClick={() => trySuggestion(m.suggest!.arrangementId, m.suggest!.cents)} className="mt-1 rounded-full border border-slate-300 px-3 py-0.5 text-xs hover:bg-slate-50 disabled:opacity-50">
-                  Try {money(m.suggest.cents)}
-                </button>
-              )}
+              {entry && <CommittedDeal entry={entry} />}
             </div>
           )
         })}

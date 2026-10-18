@@ -1,6 +1,5 @@
 import { z } from 'zod'
 import {
-  checklistStepSchema,
   draftSchema,
   intentPrivateSchema,
   intentPublicSchema,
@@ -21,7 +20,7 @@ export const myIntentSchema = z.object({
 
 export const mineEntrySchema = z.object({
   terms: termsViewSchema,
-  checklist: z.array(checklistStepSchema).nullable(),
+  contacts: z.array(z.object({ handle: z.string(), phone: z.string().nullable() })).nullable(),
 })
 
 export const relevantSchema = z.object({
@@ -72,4 +71,4 @@ export type MyIntent = z.infer<typeof myIntentSchema>
 export type MineEntry = z.infer<typeof mineEntrySchema>
 export type Relevant = z.infer<typeof relevantSchema>
 export type NegotiateResult = z.infer<typeof negotiateResultSchema>
-export { draftSchema, nearMissSchema, checklistStepSchema, intentPublicSchema }
+export { draftSchema, nearMissSchema, intentPublicSchema }

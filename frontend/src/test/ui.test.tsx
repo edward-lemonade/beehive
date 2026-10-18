@@ -13,7 +13,7 @@ import { nextSuggestion, roleOf } from '../lib/agentSpeech'
 import { AgentChat } from '../panels/AgentChat'
 import { AgentWindow } from '../panels/AgentWindow'
 import { dollarsToCents } from '../lib/format'
-import { ApprovalCard } from '../panels/Approvals'
+import { CommittedDeal } from '../panels/Approvals'
 
 function wrap(api: Api, ui: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -57,24 +57,13 @@ describe('public feed', () => {
   })
 })
 
-describe('approvals', () => {
-  it('shows terms and approves', async () => {
-    const api = createMockApi()
-    const spy = vi.spyOn(api, 'arrangementAction')
-    const [entry] = await api.arrangements()
-    wrap(api, <ul><ApprovalCard entry={entry!} /></ul>)
-    expect(screen.getByText(/Includes 1 other participant you will not deal with/)).toBeInTheDocument()
-    fireEvent.click(screen.getByText('Approve'))
-    await waitFor(() => expect(spy).toHaveBeenCalledWith('arr-1', 'approve', undefined))
-  })
-
-  it('shows contacts and a tickable checklist after commit', async () => {
+describe('committed deal', () => {
+  it('shows contacts to take the deal off platform', async () => {
     const api = createMockApi()
     await api.arrangementAction('arr-1', 'approve')
     const [entry] = await api.arrangements()
-    wrap(api, <ul><ApprovalCard entry={entry!} /></ul>)
+    wrap(api, <CommittedDeal entry={entry!} />)
     expect(screen.getByText(/Otter-1002 \+1 555 0100/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('checkbox'))
   })
 })
 
@@ -133,20 +122,19 @@ describe('agent chat', () => {
     const confirm = vi.spyOn(api, 'confirmDraft')
     wrap(api, <LiveProvider><AgentChat /></LiveProvider>)
     expect(await screen.findByText(/I'm your agent/)).toBeInTheDocument()
-    expect(await screen.findByText(/found a match/)).toBeInTheDocument()
+    expect(await screen.findByText(/Mock agent here\.$/)).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('Message your agent'), { target: { value: 'selling a ticket' } })
     fireEvent.click(screen.getByText('Send'))
-    expect(await screen.findByText(/Mock agent here/)).toBeInTheDocument()
+    expect(await screen.findByText(/You said: selling a ticket/)).toBeInTheDocument()
     expect(confirm).not.toHaveBeenCalled()
   })
 
-  it('shows the arrangement card inside the chat and reports a final price', async () => {
+  it('puts a pending arrangement to the user in words, with no approval buttons', async () => {
     const api = createMockApi()
     wrap(api, <LiveProvider><AgentChat /></LiveProvider>)
-    fireEvent.click(await screen.findByText('Negotiate further'))
-    fireEvent.change(screen.getByLabelText('Message to their agent'), { target: { value: 'Does $250 work?' } })
-    fireEvent.click(screen.getByText('Ask'))
-    expect(await screen.findByText(/is final/)).toBeInTheDocument()
+    expect(await screen.findByText(/Mock agent here\.$/)).toBeInTheDocument()
+    expect(screen.queryByText('Approve')).toBeNull()
+    expect(screen.queryByText('Negotiate further')).toBeNull()
   })
 
   it('switches to sms only after a phone is added', async () => {

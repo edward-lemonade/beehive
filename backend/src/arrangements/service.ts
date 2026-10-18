@@ -3,7 +3,6 @@ import { clock } from '../clock.js';
 import {
   APPROVAL_WINDOW_MS,
   type Arrangement,
-  type ChecklistStep,
   type RelevantEdge,
   type IntentPublic,
   type TermsView,
@@ -17,7 +16,7 @@ import { priceArrangement, repriceLink } from '../negotiation/arrangement.js';
 import { ensureAgent } from '../runtime/registry.js';
 import { contactsFor } from './contacts.js';
 import { arrangementRepo } from './repository.js';
-import { buildChecklist, netFor, termsHash, termsView } from './terms.js';
+import { netFor, termsHash, termsView } from './terms.js';
 import {
   ArrangementError,
   isVacated,
@@ -254,7 +253,6 @@ export async function proposeDraft(
       approvedNetCents: null,
       requestedAt: null,
       decidedAt: null,
-      checklist: null,
     })),
     links: draft.links,
   };
@@ -302,6 +300,7 @@ async function vacateLocked(arr: StoredArrangement, intentId: string, reason: Va
   if (!slot || isVacated(slot)) return;
 
   slot.approval = APPROVAL_FOR[reason];
+  arr.proposal = null;
   slot.decidedAt = clock.now();
   clearTimer(`${arr.id}|${intentId}`);
   if (BARRED.has(reason) && !arr.excluded.includes(intentId)) arr.excluded.push(intentId);
@@ -419,8 +418,7 @@ async function applyReplacement(arr: StoredArrangement, vacated: StoredSlot): Pr
               approvedNetCents: null,
               requestedAt: null,
               decidedAt: null,
-              checklist: null,
-            };
+                    };
       }),
     };
 
@@ -502,6 +500,15 @@ export function approve(userId: string, arrangementId: string): Promise<void> {
   return locked(arrangementId, async () => {
     const { arr, slot } = await participantContext(userId, arrangementId);
     if (arr.state !== 'proposed') throw notProposed();
+    // A standing proposal from the other side is what a yes refers to: accepting it changes the price.
+    if (arr.proposal && arr.proposal.fromIntentId !== slot.intentId) return acceptProposalLocked(arr, slot);
+    await approveSlotLocked(arr, slot);
+  });
+}
+
+async function approveSlotLocked(arr: StoredArrangement, slot: StoredSlot): Promise<void> {
+  {
+    const userId = slot.userId;
     if (slot.approval === 'approved') return;
     if (slot.approval === 'queued') throw new ArrangementError('This arrangement is waiting for your other pending approvals', 409);
     if (slot.approval !== 'requested') throw notProposed();
@@ -527,13 +534,42 @@ export function approve(userId: string, arrangementId: string): Promise<void> {
     if (!(await persist(arr))) throw notProposed();
     promoteQueue.add(userId);
     if (arr.slots.every((s) => s.approval === 'approved')) await commitLocked(arr);
-  });
+  }
 }
 
-export function decline(userId: string, arrangementId: string): Promise<void> {
+// The proposer implicitly approves their own price; the accepter's yes completes it. Nobody is left waiting.
+async function acceptProposalLocked(arr: StoredArrangement, accepter: StoredSlot): Promise<void> {
+  const proposal = arr.proposal!;
+  const link = arr.links.find((l) => l.id === proposal.linkId);
+  arr.proposal = null;
+  if (!link) {
+    await persist(arr);
+    return;
+  }
+  arr.links = arr.links.map((l) => (l.id === link.id ? { ...l, amountCents: proposal.amountCents, state: 'agreed' as const } : l));
+  arr.revision += 1;
+  carryApprovals(arr);
+  const proposer = arr.slots.find((s) => s.intentId === proposal.fromIntentId);
+  const opened = await assignRequests(arr);
+  for (const s of [proposer, accepter]) if (s && (s.approval === 'queued' || s.approval === 'approved')) s.approval = 'requested';
+  if (!(await persist(arr))) throw notProposed();
+  await dispatchRequests(arr, opened.filter((s) => s.intentId !== accepter.intentId && s.intentId !== proposal.fromIntentId));
+  if (proposer) await approveSlotLocked(arr, proposer).catch(() => undefined);
+  const fresh = (await arrangementRepo().get(arr.id)) ?? arr;
+  const again = fresh.slots.find((s) => s.intentId === accepter.intentId);
+  if (fresh.state === 'proposed' && again) await approveSlotLocked(fresh, again);
+}
+
+export function decline(userId: string, arrangementId: string, opts: { dropDeal?: boolean } = {}): Promise<void> {
   return locked(arrangementId, async () => {
     const { arr, slot } = await participantContext(userId, arrangementId);
     if (arr.state !== 'proposed') throw notProposed();
+    // Saying no to someone's counter-price turns down that price only; the deal at its current price stays.
+    if (arr.proposal && arr.proposal.fromIntentId !== slot.intentId && !opts.dropDeal) {
+      arr.proposal = null;
+      if (!(await persist(arr))) throw notProposed();
+      return;
+    }
     if (slot.approval !== 'requested' && slot.approval !== 'queued') throw notProposed();
     await arrangementRepo().addDecline(userId, arr.key, clock.now());
     await vacateLocked(arr, slot.intentId, 'declined');
@@ -584,8 +620,26 @@ export function negotiateFurther(
     if (!link) throw new ArrangementError('Choose which cash link to renegotiate', 400);
 
     const side = link.payer === slot.intentId ? 'payer' : 'receiver';
+    const open = arr.proposal;
+    if (open && open.linkId === link.id && input.targetCents !== undefined) {
+      // Naming the price already on the table is a yes (theirs) or a repeat (mine); neither starts a new round.
+      if (open.amountCents === input.targetCents) {
+        if (open.fromIntentId !== slot.intentId) {
+          await acceptProposalLocked(arr, slot);
+          const done = (await arrangementRepo().get(arr.id)) ?? arr;
+          return { status: 'agreed', terms: await viewFor(done, done.slots.find((s) => s.intentId === slot.intentId) ?? slot) };
+        }
+        return { status: 'pending', amountCents: open.amountCents };
+      }
+    }
     const result = await repriceLink(toContract(arr), link.id, { side, ...(input.targetCents !== undefined ? { cents: input.targetCents } : {}) }, `r${arr.revision}`);
-    if (result.state === 'pending') return { status: 'pending', amountCents: result.amountCents };
+    if (result.state === 'pending') {
+      // Remember the price on the table so the other user's yes, no or counter has something concrete to answer.
+      arr.proposal = { linkId: link.id, amountCents: result.amountCents, fromIntentId: slot.intentId };
+      if (!(await persist(arr))) throw notProposed();
+      return { status: 'pending', amountCents: result.amountCents };
+    }
+    arr.proposal = null;
     if (result.state !== 'agreed') return { status: 'failed', reason: result.reason };
 
     arr.links = arr.links.map((l) => (l.id === link.id ? { ...l, amountCents: result.amountCents, state: 'agreed' as const } : l));
@@ -618,9 +672,6 @@ async function commitLocked(arr: StoredArrangement): Promise<void> {
   const contacts = await contactsFor(committed.slots.map((s) => s.userId));
   const contactOf = (userId: string): string | null => contacts.get(userId) ?? null;
 
-  for (const slot of committed.slots) slot.checklist = buildChecklist(committed, slot, intents, contactOf);
-  await repo.save(committed);
-
   for (const slot of committed.slots) {
     const counterparties = new Map<string, { handle: string; phone: string | null }>();
     for (const link of committed.links) {
@@ -634,7 +685,6 @@ async function commitLocked(arr: StoredArrangement): Promise<void> {
     }
     notify(slot.userId, 'committed', {
       arrangementId: committed.id,
-      checklist: slot.checklist as ChecklistStep[],
       contacts: [...counterparties.values()],
     });
   }
@@ -651,28 +701,32 @@ async function commitLocked(arr: StoredArrangement): Promise<void> {
   for (const slot of committed.slots) promoteQueue.add(slot.userId);
 }
 
-export function markStep(userId: string, arrangementId: string, stepId: string, done: boolean): Promise<ChecklistStep[]> {
-  return locked(arrangementId, async () => {
-    const { arr, slot } = await participantContext(userId, arrangementId);
-    if (arr.state !== 'committed') throw new ArrangementError('Arrangement is not committed', 409);
-    const step = slot.checklist?.find((s) => s.id === stepId);
-    if (!step) throw new ArrangementError('Checklist step not found', 404);
-    step.done = done;
-    await persist(arr);
-    return slot.checklist!;
-  });
-}
-
 // ---- reads --------------------------------------------------------------------------------
 
-export type MineEntry = { terms: TermsView; checklist: ChecklistStep[] | null };
+export type Counterparty = { handle: string; phone: string | null };
+export type MineEntry = { terms: TermsView; contacts: Counterparty[] | null };
+
+async function counterpartiesOf(arr: StoredArrangement, slot: StoredSlot, intents: Map<string, StoredIntent>): Promise<Counterparty[]> {
+  const others = new Map<string, StoredSlot>();
+  for (const link of arr.links) {
+    if (link.a !== slot.intentId && link.b !== slot.intentId) continue;
+    const other = arr.slots.find((s) => s.intentId === (link.a === slot.intentId ? link.b : link.a));
+    if (other) others.set(other.intentId, other);
+  }
+  const phones = await contactsFor([...others.values()].map((s) => s.userId));
+  return [...others.values()].map((s) => ({
+    handle: intents.get(s.intentId)?.public.ownerHandle ?? 'unknown',
+    phone: phones.get(s.userId) ?? null,
+  }));
+}
 
 export async function listMine(userId: string): Promise<MineEntry[]> {
   const out: MineEntry[] = [];
   for (const arr of await arrangementRepo().listForUser(userId)) {
     const intents = await loadIntents(arr);
     for (const slot of arr.slots.filter((s) => s.userId === userId && intents.has(s.intentId))) {
-      out.push({ terms: await viewFor(arr, slot, intents), checklist: slot.checklist });
+      const terms = await viewFor(arr, slot, intents);
+      out.push({ terms, contacts: arr.state === 'committed' ? await counterpartiesOf(arr, slot, intents) : null });
     }
   }
   return out;

@@ -30,6 +30,8 @@ export type LinkBounds = {
   payerNegotiable?: boolean;
   /** The payer's user named this price, so the receiver's agent answers it or asks its own user instead of haggling. */
   directed?: boolean;
+  /** The seller's user named this price, so the seller's agent speaks first and the buyer's agent must ask its user. */
+  sellerLed?: boolean;
 };
 
 export type SessionState = {
@@ -119,6 +121,7 @@ export function linkBounds(
     receiverAskCents: Math.max(ask, receiverBounds.minCents),
     payerNegotiable: unstated && anchors.payerOpenCents === undefined,
     directed: anchors.payerOpenCents !== undefined,
+    sellerLed: anchors.receiverAskCents !== undefined,
   };
 }
 

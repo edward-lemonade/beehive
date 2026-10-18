@@ -212,20 +212,13 @@ describe('priceArrangement', () => {
     expect((await priceArrangement(arrangement())).reason).toBe('stale');
   });
 
-  it('drops a leaking wording at the guard and continues with the template', async () => {
+  it('does not add a spoken line to plain offers and accepts', async () => {
     s1();
     await connect('A', 'B', 'C');
-    setWordingProvider(async () => 'my limit is 6000');
-    const violations: string[] = [];
-    bus.onViolation((v) => violations.push(v.rule));
+    setWordingProvider(async () => 'chatter');
     const result = await priceArrangement(arrangement());
     expect(result.state).toBe('agreed');
-    expect(violations).toContain('content');
-    const says = log.entries.filter((e) => e.kind === 'say').map((e) => e.text ?? '');
-    expect(says.length).toBeGreaterThan(0);
-    const fromC = log.entries.filter((e) => e.kind === 'say' && e.from === 'C').map((e) => e.text ?? '');
-    expect(fromC.some((t) => t.includes('6000'))).toBe(false);
-    expect(says.every((t) => !/\bh-[ABC]\b/i.test(t))).toBe(true);
+    expect(log.entries.filter((e) => e.kind === 'say')).toHaveLength(0);
   });
 });
 
