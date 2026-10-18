@@ -42,7 +42,7 @@ if (dsn && !process.env.VITEST) {
     beforeSend: (event) => scrubEvent(event),
     // v11 streams spans by default, so span scrubbing happens here rather than in beforeSendTransaction.
     beforeSendSpan: (span) => ({ ...span, name: redact(span.name), attributes: scrubAttributes(span.attributes) }),
-    beforeSendLog: (log) => ({ ...log, attributes: scrubAttributes(log.attributes) }),
+    beforeSendLog: (log) => ({ ...log, message: typeof log.message === 'string' ? redact(log.message) : log.message, attributes: scrubAttributes(log.attributes) }),
   });
   console.log(`Sentry enabled (env=${process.env.SENTRY_ENVIRONMENT || process.env.NODE_ENV || 'development'}, llm_io=${recordLlmIo})`);
 }

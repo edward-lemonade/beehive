@@ -22,6 +22,7 @@ import { intentsRouter, publicMapRouter } from './intents/routes.js';
 import { sentry } from '@sentry/hono/node';
 import { sql } from './db/index.js';
 import { demoRouter } from './observability/demo.js';
+import { installConversationLog } from './observability/conversation.js';
 import { installMonitors } from './observability/monitors.js';
 import { Sentry } from './observability/telemetry.js';
 
@@ -63,6 +64,7 @@ if (config.DEMO_MODE) app.route('/demo', demoRouter);
 
 installNegotiation();
 installMonitors();
+installConversationLog();
 installSseBridge();
 
 if (!process.env.VITEST) {

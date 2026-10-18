@@ -34,22 +34,6 @@ export const negotiateResultSchema = z.object({
   rounds: z.number().optional(),
 })
 
-export const historyRoundSchema = z.object({
-  at: z.number(),
-  round: z.number(),
-  kind: z.enum(['offer', 'accept', 'walk', 'say']),
-  amountCents: z.number().nullable(),
-  text: z.string().nullable(),
-  fromIntentId: z.string(),
-  toIntentId: z.string(),
-  fromHandle: z.string(),
-  toHandle: z.string(),
-  fromText: z.string().default(''),
-  toText: z.string().default(''),
-  fromMine: z.boolean(),
-  linkId: z.string(),
-})
-
 export const channelSchema = z.object({
   channel: z.enum(['app', 'sms']),
   phoneLinked: z.boolean(),
@@ -65,7 +49,6 @@ export const actionResultSchema = z.object({
 
 export type ChannelState = z.infer<typeof channelSchema>
 export type ActionResult = { status: 'ok' | 'agreed' | 'pending' | 'failed'; reason?: string; amountCents?: number }
-export type HistoryRound = z.infer<typeof historyRoundSchema>
 export type Draft = z.infer<typeof draftSchema>
 export type MyIntent = z.infer<typeof myIntentSchema>
 export type MineEntry = z.infer<typeof mineEntrySchema>

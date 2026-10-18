@@ -33,6 +33,33 @@ export function providerName(baseUrl = config.LLM_BASE_URL): string {
 const recordIo = (): boolean => process.env.SENTRY_RECORD_LLM_IO === 'true';
 const parts = (m: LlmMessage) => ({ role: m.role, parts: [{ type: 'text', content: m.content }] });
 
+type Usage = { input: number; output: number; total: number };
+const agentUsage = new WeakMap<Sentry.Span, Usage>();
+
+/** The enclosing `invoke_agent` span, if this LLM call is one step of an agent turn. */
+function agentSpan(): Sentry.Span | undefined {
+  const active = Sentry.getActiveSpan();
+  return active && Sentry.spanToJSON(active).attributes['gen_ai.operation.name'] === 'invoke_agent' ? active : undefined;
+}
+
+// Sentry's AI Agents view reads cost and tokens from the agent span itself, so each call's usage is summed onto it.
+function addAgentUsage(agent: Sentry.Span | undefined, usage: CompletionBody['usage']): void {
+  if (!agent || !usage) return;
+  const sum = agentUsage.get(agent) ?? { input: 0, output: 0, total: 0 };
+  sum.input += usage.prompt_tokens ?? 0;
+  sum.output += usage.completion_tokens ?? 0;
+  sum.total += usage.total_tokens ?? (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0);
+  agentUsage.set(agent, sum);
+  agent.setAttributes({ 'gen_ai.usage.input_tokens': sum.input, 'gen_ai.usage.output_tokens': sum.output, 'gen_ai.usage.total_tokens': sum.total });
+}
+
+/** Records an agent turn's user input and final reply on its `invoke_agent` span, only when LLM I/O recording is on. */
+export function recordAgentIo(span: Sentry.Span, io: { input?: string; output?: string }): void {
+  if (!recordIo()) return;
+  if (io.input !== undefined) span.setAttribute('gen_ai.input.messages', JSON.stringify([parts({ role: 'user', content: io.input })]));
+  if (io.output !== undefined) span.setAttribute('gen_ai.output.messages', JSON.stringify([parts({ role: 'assistant', content: io.output })]));
+}
+
 type CompletionBody = {
   model?: string;
   id?: string;
@@ -59,6 +86,7 @@ export async function chatCompletion(req: LlmRequest): Promise<string> {
     attributes['gen_ai.input.messages'] = JSON.stringify(req.messages.filter((m) => m.role !== 'system').map(parts));
   }
 
+  const agent = agentSpan();
   return Sentry.startSpan({ op: 'gen_ai.chat', name: `chat ${model}`, attributes }, async (span) => {
     const started = performance.now();
     const tags = { function_id: req.functionId, model, provider };
@@ -92,6 +120,7 @@ export async function chatCompletion(req: LlmRequest): Promise<string> {
         ...(typeof usage?.completion_tokens === 'number' ? { 'gen_ai.usage.output_tokens': usage.completion_tokens } : {}),
         ...(typeof usage?.total_tokens === 'number' ? { 'gen_ai.usage.total_tokens': usage.total_tokens } : {}),
       });
+      addAgentUsage(agent, usage);
       if (typeof usage?.total_tokens === 'number') metric.count('llm.tokens', tags, usage.total_tokens);
       if (typeof content !== 'string' || !content.trim()) throw new Error(`${req.functionId} returned an empty response`);
       if (recordIo()) span.setAttribute('gen_ai.output.messages', JSON.stringify([parts({ role: 'assistant', content })]));

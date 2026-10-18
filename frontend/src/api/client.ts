@@ -6,7 +6,6 @@ import {
   mineEntrySchema,
   myIntentSchema,
   nearMissSchema,
-  historyRoundSchema,
   channelSchema,
   actionResultSchema,
   negotiateResultSchema,
@@ -16,7 +15,6 @@ import {
   type Draft,
   type MineEntry,
   type MyIntent,
-  type HistoryRound,
   type NegotiateResult,
   type Relevant,
 } from './schemas'
@@ -52,7 +50,6 @@ export type Api = {
   keepLooking(id: string): Promise<void>
   nearMisses(id: string): Promise<NearMiss[]>
   relevant(id: string): Promise<Relevant>
-  history(): Promise<HistoryRound[]>
   negotiate(ownIntentId: string, targetIntentId: string, targetCents?: number): Promise<NegotiateResult>
   arrangements(): Promise<MineEntry[]>
   arrangementAction(id: string, action: ArrangementAction, body?: { targetCents: number }): Promise<ActionResult>
@@ -99,7 +96,6 @@ export function createHttpApi(getToken: TokenGetter, baseUrl = API_URL): Api {
   return {
     publicIntents: async () => z.array(intentPublicSchema).parse((await request('/map/intents')).intents),
     myIntents: async () => z.array(myIntentSchema).parse((await request('/intents/mine')).intents),
-    history: async () => z.array(historyRoundSchema).parse((await request('/negotiate/history')).rounds),
     agentChat: async (input) => {
       const r = await post('/agent/chat', input)
       return { reply: z.string().parse(r.reply), draft: draftSchema.nullable().parse(r.draft ?? null), changed: Boolean(r.changed) }

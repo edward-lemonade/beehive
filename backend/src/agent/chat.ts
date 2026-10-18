@@ -5,8 +5,9 @@ import { events } from '../events.js';
 import { confirmDraft, createDraft, getIntentRepository, listMine, listPublicIntents, setStandingLimit } from '../intents/service.js';
 import { negotiationLog } from '../negotiation/log.js';
 import { negotiateDirect } from '../negotiation/service.js';
+import { logToolCall } from '../observability/conversation.js';
 import { recordChatEval } from '../observability/evals.js';
-import { chatCompletion, providerName, stripFences } from '../observability/llm.js';
+import { chatCompletion, providerName, recordAgentIo, stripFences } from '../observability/llm.js';
 import { canaryInstruction, detectPromptLeak, reportInjection, scanForInjection } from '../observability/security.js';
 import { Sentry, metric } from '../observability/telemetry.js';
 import { config } from '../config.js';
@@ -33,6 +34,23 @@ const AGENT_NAME = 'trade-agent-chat';
 const BLOCKED_RESULT = /^(Not approved\.|No such pending arrangement|Approvals can only follow|Listings can only be posted|The limit must be|That intent (of the user )?is not open|That is not the user's intent|No listing text was given)/;
 const toolOutcome = (result: string): 'ok' | 'blocked' | 'failed' =>
   /^Failed:|^Unknown action/.test(result) ? 'failed' : BLOCKED_RESULT.test(result) ? 'blocked' : 'ok';
+// Short, text-free reason codes for tool spans, so a failed or refused call says why without leaking amounts.
+const TOOL_REASONS: Array<[RegExp, string]> = [
+  [/^Failed: /, 'exception'],
+  [/^Unknown action/, 'unknown_action'],
+  [/^Not approved\. The price on the table/, 'price_mismatch'],
+  [/^No such pending arrangement/, 'unknown_arrangement'],
+  [/^Approvals can only follow/, 'not_user_initiated'],
+  [/^Listings can only be posted/, 'not_user_initiated'],
+  [/^The limit must be/, 'invalid_limit'],
+  [/^That intent (of the user )?is not open/, 'intent_not_open'],
+  [/^That is not the user's intent/, 'not_owner'],
+  [/^No listing text was given/, 'missing_text'],
+];
+const PRIVATE_ARG = /^(minCents|text|message)$/;
+const redactToolArgs = (args: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(args).map(([k, v]) => [k, PRIVATE_ARG.test(k) ? '[redacted]' : v]));
+const toolReason = (result: string): string | undefined => TOOL_REASONS.find(([re]) => re.test(result))?.[1];
 const money = (cents: unknown): string => (typeof cents === 'number' ? `$${(cents / 100).toFixed(2).replace(/\.00$/, '')}` : 'unknown');
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n)}…` : s);
 
@@ -222,7 +240,12 @@ export async function runAgentChat(input: AgentChatInput): Promise<AgentChatResu
       'agent.trigger': input.event ? 'event' : 'message',
       'agent.history_turns': input.history.length,
     },
-  }, () => runAgentChatTurn(input));
+  }, async (span) => {
+    recordAgentIo(span, { input: input.event ? `EVENT: ${JSON.stringify(input.event)}` : input.message });
+    const result = await runAgentChatTurn(input);
+    recordAgentIo(span, { output: result.reply });
+    return result;
+  });
 }
 
 async function runAgentChatTurn(input: AgentChatInput): Promise<AgentChatResult> {
@@ -332,6 +355,8 @@ async function runAgentChatTurn(input: AgentChatInput): Promise<AgentChatResult>
         default: return 'Unknown action.';
       }
     } catch (error) {
+      // Captured inside the execute_tool span, so the issue links to the tool call and its trace.
+      Sentry.captureException(error, { tags: { 'gen_ai.tool.name': action.type, 'gen_ai.agent.name': AGENT_NAME } });
       return `Failed: ${error instanceof Error ? error.message : 'unknown error'}`;
     }
   }
@@ -343,11 +368,22 @@ async function runAgentChatTurn(input: AgentChatInput): Promise<AgentChatResult>
       name: `execute_tool ${action.type}`,
       attributes: { 'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.name': action.type, 'gen_ai.tool.type': 'function', 'gen_ai.agent.name': AGENT_NAME },
     }, async (span) => {
+      const started = performance.now();
       const result = await execute(action);
       const outcome = toolOutcome(result);
-      span.setAttribute('tool.outcome', outcome);
-      if (outcome !== 'ok') span.setStatus({ code: 2, message: outcome });
-      metric.count('agent.tool_call', { tool: action.type, outcome });
+      const { type: _tool, ...args } = action as { type: string } & Record<string, unknown>;
+      logToolCall({ handle: user.handle, action, result, outcome, durationMs: performance.now() - started });
+      const reason = toolReason(result);
+      span.setAttributes({
+        'tool.outcome': outcome,
+        'tool.reason': reason,
+        'arrangement.id': typeof args.arrangementId === 'string' ? args.arrangementId : undefined,
+        // Argument names and IDs are safe; private amounts (limits) and free text only go out with LLM I/O recording on.
+        'gen_ai.tool.call.arguments': JSON.stringify(config.SENTRY_RECORD_LLM_IO === 'true' ? args : redactToolArgs(args)),
+        ...(config.SENTRY_RECORD_LLM_IO === 'true' ? { 'gen_ai.tool.call.result': clip(result, 2000) } : {}),
+      });
+      if (outcome !== 'ok') span.setStatus({ code: 2, message: `${outcome}: ${reason ?? 'unclassified'}` });
+      metric.count('agent.tool_call', { tool: action.type, outcome, reason: reason ?? 'none' });
       return result;
     });
 

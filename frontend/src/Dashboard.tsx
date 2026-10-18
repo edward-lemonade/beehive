@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { PublicIntents } from './feed/PublicIntents'
 import { LiveProvider } from './hooks/live'
 import { AgentChat } from './panels/AgentChat'
-import { AgentWindow } from './panels/AgentWindow'
 import { MyIntents } from './panels/MyIntents'
 
 const tabs = ['Mine', 'Agent', 'Feed'] as const
@@ -37,7 +36,6 @@ function Layout() {
           <PublicIntents />
         </div>
       </div>
-      <AgentWindow />
     </>
   )
 }

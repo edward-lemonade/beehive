@@ -6,16 +6,6 @@ import type { MyIntent } from '../api/schemas'
 
 export type FeedEntry = { id: number; at: number; text: string; speech: boolean }
 
-export type ChatMessage = {
-  id: number
-  at: number
-  mine: boolean
-  kind: 'offer' | 'accept' | 'walk' | 'say'
-  amountCents: number | null
-  text: string | null
-}
-export type Conversation = { key: string; handle: string; mineText: string; theirText: string; messages: ChatMessage[]; updatedAt: number }
-
 export type ChatMsg = {
   id: number
   at: number
@@ -30,13 +20,12 @@ export type ChatInput = Omit<ChatMsg, 'id' | 'at'>
 type Live = {
   up: boolean
   feed: FeedEntry[]
-  conversations: Conversation[]
   chat: ChatMsg[]
   postChat: (message: ChatInput) => void
   clearChat: () => void
 }
 
-export const LiveContext = createContext<Live>({ up: false, feed: [], conversations: [], chat: [], postChat: () => {}, clearChat: () => {} })
+export const LiveContext = createContext<Live>({ up: false, feed: [], chat: [], postChat: () => {}, clearChat: () => {} })
 export const useLive = (): Live => useContext(LiveContext)
 
 export const FEED_CAP = 100
@@ -99,57 +88,3 @@ export function describe(event: StreamEvent): { text: string; speech: boolean } 
 
 /** Polling interval used while the stream is down. */
 export const pollWhenDown = (up: boolean): number | false => (up ? false : 10_000)
-
-const roundKey = (d: Record<string, unknown>): string =>
-  [d.linkId, d.round, d.kind, d.fromIntentId, d.amountCents ?? '', d.text ?? ''].join('|')
-
-/** Rebuilds conversations from stored history, then replays live rounds that history does not already contain. */
-export function mergeHistory(
-  history: Array<{ at: number } & Record<string, unknown>>,
-  live: Array<{ event: StreamEvent; id: number; at: number }>,
-): Conversation[] {
-  let convs: Conversation[] = []
-  const known = new Set<string>()
-  history.forEach((h, i) => {
-    known.add(roundKey(h))
-    convs = addRound(convs, { type: 'negotiation.round', data: h }, -(history.length - i), h.at)
-  })
-  for (const l of live) {
-    if (known.has(roundKey(l.event.data))) continue
-    convs = addRound(convs, l.event, l.id, l.at)
-  }
-  return convs
-}
-
-export const CONVERSATION_CAP = 50
-export const MESSAGE_CAP = 200
-
-const KINDS = new Set(['offer', 'accept', 'walk', 'say'])
-
-/** Folds one negotiation.round event into the per-counterparty conversations. */
-export function addRound(prev: Conversation[], event: StreamEvent, id: number, at: number): Conversation[] {
-  const d = event.data
-  if (event.type !== 'negotiation.round' || typeof d.kind !== 'string' || !KINDS.has(d.kind)) return prev
-  const mine = d.fromMine === true
-  const myId = String((mine ? d.fromIntentId : d.toIntentId) ?? '')
-  const theirId = String((mine ? d.toIntentId : d.fromIntentId) ?? '')
-  const key = myId && theirId ? `${myId}:${theirId}` : String(d.linkId ?? '')
-  if (!key) return prev
-  const mineText = String((mine ? d.fromText : d.toText) ?? '')
-  const theirText = String((mine ? d.toText : d.fromText) ?? '')
-  const handle = String((mine ? d.toHandle : d.fromHandle) ?? 'unknown')
-  const kind = d.kind as ChatMessage['kind']
-  const amountCents = typeof d.amountCents === 'number' ? d.amountCents : null
-  const text = typeof d.text === 'string' ? d.text : null
-
-  const existing = prev.find((c) => c.key === key)
-  const messages = existing ? [...existing.messages] : []
-  const last = messages[messages.length - 1]
-  if (kind === 'say' && last && last.mine === mine && last.kind !== 'say' && last.text === null) {
-    messages[messages.length - 1] = { ...last, text }
-  } else {
-    messages.push({ id, at, mine, kind, amountCents, text })
-  }
-  const next: Conversation = { key, handle, mineText, theirText, messages: messages.slice(-MESSAGE_CAP), updatedAt: at }
-  return [next, ...prev.filter((c) => c.key !== key)].slice(0, CONVERSATION_CAP)
-}

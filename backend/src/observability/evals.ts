@@ -66,8 +66,8 @@ export function recordChatEval(turn: ChatTurnTrace, attrs: { trigger: 'message' 
   metric.dist('agent.eval.score', score, 'ratio', tags);
   for (const g of grades) {
     metric.count('agent.eval.grade', { ...tags, grader: g.name, result: g.pass ? 'pass' : 'fail' });
+    recordEvalResult({ name: g.name, source: 'live', pass: g.pass, detail: g.detail, attrs: { 'eval.trigger': attrs.trigger, 'eval.injected_context': tags.injected_context } });
     if (g.pass) continue;
-    log.warn('Agent eval failed', { grader: g.name, detail: g.detail, trigger: attrs.trigger, injected_context: tags.injected_context });
     Sentry.withScope((scope) => {
       scope.setLevel('warning');
       scope.setFingerprint(['agent-eval', g.name]);
@@ -78,4 +78,37 @@ export function recordChatEval(turn: ChatTurnTrace, attrs: { trigger: 'message' 
     });
   }
   return { score, grades };
+}
+
+export type EvalResult = {
+  name: string;
+  source: 'live' | 'offline';
+  pass: boolean;
+  detail?: string;
+  attrs?: Record<string, string | number | boolean | undefined>;
+};
+
+/**
+ * One `eval` span per eval result. Group a spans table by `eval.name` with `max(eval.pass_at)` and
+ * `max(eval.fail_at)`: one row per eval, and whichever timestamp is newer is its latest result.
+ */
+export function recordEvalResult(r: EvalResult): void {
+  const result = r.pass ? 'pass' : 'fail';
+  const at = Math.floor(Date.now() / 1000);
+  Sentry.startSpan({
+    op: 'eval',
+    name: `eval ${r.name}`,
+    attributes: {
+      'eval.name': r.name,
+      'eval.source': r.source,
+      'eval.result': result,
+      'eval.pass': r.pass ? 1 : 0,
+      [r.pass ? 'eval.pass_at' : 'eval.fail_at']: at,
+      'eval.detail': r.detail,
+      ...r.attrs,
+    },
+  }, (span) => {
+    if (!r.pass) span.setStatus({ code: 2, message: 'eval_failed' });
+  });
+  log[r.pass ? 'info' : 'warn'](`eval ${r.name} ${result}`, { 'eval.name': r.name, 'eval.source': r.source, 'eval.result': result, 'eval.detail': r.detail, ...r.attrs });
 }

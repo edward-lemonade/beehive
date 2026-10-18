@@ -23,32 +23,7 @@ export function installSseBridge(): void {
     });
   });
 
-  events.on('negotiation.round', (round) => {
-    void (async () => {
-      const repo = getIntentRepository();
-      const [from, to] = await Promise.all([round.fromIntentId ? repo.get(round.fromIntentId) : undefined, round.toIntentId ? repo.get(round.toIntentId) : undefined]);
-      for (const userId of new Set([from?.ownerId, to?.ownerId].filter((id): id is string => !!id))) {
-        sseHub.publishToUser(userId, {
-          type: 'negotiation.round',
-          payload: {
-            round: round.round,
-            kind: round.kind,
-            amountCents: round.amountCents ?? null,
-            text: round.text ?? null,
-            fromIntentId: round.fromIntentId,
-            toIntentId: round.toIntentId,
-            fromHandle: from?.public.ownerHandle ?? 'unknown',
-            toHandle: to?.public.ownerHandle ?? 'unknown',
-            fromText: from?.public.freeText ?? '',
-            toText: to?.public.freeText ?? '',
-            fromMine: from?.ownerId === userId,
-            linkId: round.linkId,
-          },
-        });
-      }
-    })().catch(() => {});
-  });
-
+  // Agent↔agent rounds are no longer pushed to browsers; they stream to Sentry Logs (observability/conversation.ts).
   events.on('negotiation.awaiting_user', (e) => {
     void (async () => {
       const repo = getIntentRepository();

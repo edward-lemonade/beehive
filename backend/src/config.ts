@@ -16,6 +16,8 @@ const envSchema = z.object({
   SENTRY_RELEASE: z.string().optional(),
   // Off by default: chat prompts hold the user's private limits and other users' listings.
   SENTRY_RECORD_LLM_IO: z.enum(['true', 'false']).default('false'),
+  // On by default: streams user↔agent and agent↔agent message text to Sentry Logs as a live transcript.
+  SENTRY_CONVERSATION_LOG: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
   DEMO_MODE: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
   TIME_SCALE: z.coerce.number().default(1),
   SEARCH_BUDGET_EXPANSIONS: z.coerce.number().default(200),

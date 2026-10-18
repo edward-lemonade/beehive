@@ -2,8 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { MyIntent } from '../api/schemas'
 import { useApi } from '../api/context'
-import type { StreamEvent } from '../api/stream'
-import { addRound, appendChat, chatFor, describe, mergeHistory, FEED_CAP, LiveContext, type ChatInput, type ChatMsg, type Conversation, type FeedEntry } from './liveContext'
+import { appendChat, chatFor, describe, FEED_CAP, LiveContext, type ChatInput, type ChatMsg, type FeedEntry } from './liveContext'
 
 const PUBLIC_EVENTS = new Set(['intent.opened', 'intent.updated', 'intent.closed'])
 
@@ -12,7 +11,6 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
   const [up, setUp] = useState(false)
   const [feed, setFeed] = useState<FeedEntry[]>([])
-  const [conversations, setConversations] = useState<Conversation[]>([])
   const [chat, setChat] = useState<ChatMsg[]>([])
   const chatSeq = useRef(0)
   // Saves run in order so a clear never lands after the messages that follow it.
@@ -52,15 +50,6 @@ export function LiveProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let seq = 0
-    let historyLoaded = false
-    const liveRounds: Array<{ event: StreamEvent; id: number; at: number }> = []
-    api.history().then(
-      (history) => {
-        historyLoaded = true
-        setConversations(mergeHistory(history, liveRounds))
-      },
-      () => { historyLoaded = true },
-    )
     const unsubscribe = api.subscribe({
       onStatus: setUp,
       onEvent: (event) => {
@@ -73,12 +62,6 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           void queryClient.invalidateQueries({ queryKey: ['arrangements'] })
         }
         if (event.type === 'chat.message') void loadChat()
-        if (event.type === 'negotiation.round') {
-          const id = (seq += 1)
-          const at = Date.now()
-          liveRounds.push({ event, id, at })
-          if (historyLoaded) setConversations((prev) => addRound(prev, event, id, at))
-        }
         const said = chatFor(event, queryClient.getQueryData<MyIntent[]>(['mine-intents']))
         if (said) postChat(said)
         const line = describe(event)
@@ -90,6 +73,6 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     return unsubscribe
   }, [api, queryClient, postChat, loadChat])
 
-  const value = useMemo(() => ({ up, feed, conversations, chat, postChat, clearChat }), [up, feed, conversations, chat, postChat, clearChat])
+  const value = useMemo(() => ({ up, feed, chat, postChat, clearChat }), [up, feed, chat, postChat, clearChat])
   return <LiveContext.Provider value={value}>{children}</LiveContext.Provider>
 }

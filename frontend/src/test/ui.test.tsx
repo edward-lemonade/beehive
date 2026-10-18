@@ -8,10 +8,9 @@ import { createMockApi, mockPublicIntents, XSS_TEXT } from '../api/mock'
 import { parseSse, type StreamEvent } from '../api/stream'
 import { IntentCard, PublicIntents } from '../feed/PublicIntents'
 import { LiveProvider } from '../hooks/live'
-import { addRound, appendChat, chatFor, describe as describeEvent } from '../hooks/liveContext'
+import { appendChat, chatFor, describe as describeEvent } from '../hooks/liveContext'
 import { nextSuggestion, roleOf } from '../lib/agentSpeech'
 import { AgentChat } from '../panels/AgentChat'
-import { AgentWindow } from '../panels/AgentWindow'
 import { dollarsToCents } from '../lib/format'
 import { CommittedDeal } from '../panels/Approvals'
 import { ContactGate } from '../panels/ContactGate'
@@ -76,15 +75,8 @@ describe('stream helpers', () => {
     expect(rest).toBe('event: par')
   })
 
-  it('folds negotiation rounds into per-agent conversations', () => {
-    const round = (data: Record<string, unknown>) => ({ type: 'negotiation.round', data: { fromIntentId: 'me', toIntentId: 'them', fromHandle: 'Me', toHandle: 'Bob', fromMine: true, ...data } })
-    expect(describeEvent(round({ kind: 'offer' }))).toBeNull()
-    let convs = addRound([], round({ kind: 'offer', amountCents: 30000 }), 1, 1)
-    convs = addRound(convs, round({ kind: 'say', text: 'How about this?' }), 2, 2)
-    convs = addRound(convs, round({ kind: 'accept', amountCents: 30000, fromIntentId: 'them', toIntentId: 'me', fromHandle: 'Bob', toHandle: 'Me', fromMine: false }), 3, 3)
-    expect(convs).toHaveLength(1)
-    expect(convs[0].handle).toBe('Bob')
-    expect(convs[0].messages.map((m) => [m.mine, m.kind, m.text])).toEqual([[true, 'offer', 'How about this?'], [false, 'accept', null]])
+  it('keeps agent-to-agent rounds out of the app feed', () => {
+    expect(describeEvent({ type: 'negotiation.round', data: { kind: 'offer' } })).toBeNull()
   })
 
   it('reads a price out of free text', () => {
@@ -145,15 +137,6 @@ describe('agent chat', () => {
     fireEvent.change(await screen.findByLabelText('Phone number'), { target: { value: '+1 555 010 0100' } })
     fireEvent.click(screen.getByText('Use SMS'))
     expect(await screen.findByText(/Your agent is texting you/)).toBeInTheDocument()
-  })
-})
-
-describe('agent window', () => {
-  it('starts collapsed and opens on click', () => {
-    wrap(createMockApi(), <LiveProvider><AgentWindow /></LiveProvider>)
-    expect(screen.queryByRole('dialog')).toBeNull()
-    fireEvent.click(screen.getByLabelText('Show agent conversations'))
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
 })
 

@@ -62,7 +62,6 @@ export function createMockApi(): Api {
   return {
     publicIntents: async () => mockPublicIntents(),
     myIntents: async () => mineIntents,
-    history: async () => [],
     agentChat: async ({ message }) => ({ reply: message ? `Mock agent here. You said: ${message}` : 'Mock agent here.', draft: null, changed: false }),
     chatMessages: async () => [],
     saveChatMessage: async () => {},
