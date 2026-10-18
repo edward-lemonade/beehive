@@ -120,6 +120,7 @@ export async function relevantTo(callerId: string, publicIntentId: string): Prom
 }
 
 const pending = new Set<string>();
+const fanout = new Set<string>();
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
 
 function schedule(intentId: string): void {
@@ -127,17 +128,26 @@ function schedule(intentId: string): void {
   if (flushTimer) return;
   flushTimer = setTimeout(() => {
     flushTimer = undefined;
-    const batch = [...pending];
-    pending.clear();
-    for (const id of batch) {
-      refreshEdges(id).catch((error) => console.error('refreshEdges failed', id, error));
-    }
+    // Neighbors of a newly opened intent are looked up now, not when the event fired, because the intent may not have been readable yet then.
+    const opened = [...fanout];
+    fanout.clear();
+    Promise.all(opened.map((id) => getNeighborhood(id).catch(() => [])))
+      .then((lists) => {
+        for (const list of lists) for (const neighbor of list) pending.add(neighbor.intentId);
+      })
+      .finally(() => {
+        const batch = [...pending];
+        pending.clear();
+        for (const id of batch) {
+          refreshEdges(id).catch((error) => console.error('refreshEdges failed', id, error));
+        }
+      });
   }, COALESCE_MS);
 }
 
 async function onOpened(intentId: string): Promise<void> {
+  fanout.add(intentId);
   schedule(intentId);
-  for (const neighbor of await getNeighborhood(intentId)) schedule(neighbor.intentId);
 }
 
 async function onUpdated(intentId: string): Promise<void> {

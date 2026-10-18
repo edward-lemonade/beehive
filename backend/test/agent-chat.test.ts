@@ -12,12 +12,13 @@ const createDraft = vi.fn(async (_u: string, text: string) => ({
 vi.mock('../src/negotiation/service.js', () => ({ negotiateDirect }));
 vi.mock('../src/arrangements/service.js', () => ({ negotiateFurther, approve, decline: vi.fn(), retract: vi.fn(), listMine: async () => [pending] }));
 vi.mock('../src/arrangements/repository.js', () => ({ arrangementRepo: () => ({ revive: async () => {}, get: async () => null }) }));
+vi.mock('../src/negotiation/log.js', () => ({ negotiationLog: () => ({ forIntents: async () => [{ kind: 'say', from: 'edward-1', to: 'mine-1', text: 'Could you do a bit less?', amountCents: null }] }) }));
 vi.mock('../src/runtime/registry.js', () => ({ ensureAgent: () => {}, scheduler: { wake: () => {} } }));
 vi.mock('../src/intents/service.js', () => ({
   listMine: async () => [{ id: 'mine-1', state: 'open', public: { freeText: 'selling a saturday niteharts ticket for $100' } }],
   listPublicIntents: async () => [{ intentId: 'edward-1', ownerHandle: 'edward', freeText: 'looking for a saturday niteharts ticket' }],
   setStandingLimit: vi.fn(async () => {}),
-  createDraft, answerDraft: vi.fn(), confirmDraft: vi.fn(), getOwnedDraft: vi.fn(),
+  createDraft, answerDraft: vi.fn(), confirmDraft: vi.fn(async () => [{ id: 'new-1' }]), getOwnedDraft: vi.fn(),
   getIntentRepository: () => ({ get: async () => undefined }),
 }));
 
@@ -43,6 +44,7 @@ describe('agent chat', () => {
     const out = await runAgentChat({ user, message: 'what about edward, who is looking for a ticket. I am selling one for $90', history: [] });
     expect(prompts[0]).toContain('edward');
     expect(prompts[0]).toContain('mine-1');
+    expect(prompts[0]).toContain("edward's agent said \"Could you do a bit less?\"");
     expect(negotiateDirect).toHaveBeenCalledWith('u1', { ownIntentId: 'mine-1', targetIntentId: 'edward-1', targetCents: 9000 });
     expect(prompts[1]).toContain('TOOL RESULT');
     expect(out.reply).toBe('edward is in at $90. Want me to lock it in?');
@@ -60,7 +62,22 @@ describe('agent chat', () => {
     expect(setStandingLimit).toHaveBeenCalledWith('mine-1', 'u1', 9000);
   });
 
-  it('never creates listings, and rejects arrangements that are not theirs', async () => {
+  it('posts a listing only from a user message, via post_listing', async () => {
+    const post = JSON.stringify({ reply: '', action: { type: 'post_listing', text: 'selling a ticket for $80' } });
+    const once = [post, JSON.stringify({ reply: 'It is live.', action: null })];
+    setChatCompleter(async () => once.shift()!);
+    const out = await runAgentChat({ user, message: 'yes post it', history: [] });
+    expect(createDraft).toHaveBeenCalledWith('u1', 'selling a ticket for $80');
+    expect(out.changed).toBe(true);
+
+    createDraft.mockClear();
+    const ev = [post, JSON.stringify({ reply: 'ok', action: null })];
+    setChatCompleter(async () => ev.shift()!);
+    await runAgentChat({ user, event: { kind: 'needs_user' }, history: [] });
+    expect(createDraft).not.toHaveBeenCalled();
+  });
+
+  it('does not create listings through unknown actions, and rejects arrangements that are not theirs', async () => {
     const script = [
       JSON.stringify({ reply: '', action: { type: 'create_draft', text: 'selling a ticket for $80' } }),
       JSON.stringify({ reply: 'Use the New intent box to list it.', action: null }),

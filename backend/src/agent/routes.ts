@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { requireAuth } from '../auth.js';
 import { runAgentChat } from './chat.js';
+import { clearChat, listChat, saveChat } from './messages.js';
 
 const bodySchema = z.object({
   message: z.string().trim().min(1).max(2000).optional(),
@@ -30,4 +31,27 @@ agentRouter.post('/chat', async (c) => {
     console.warn('Agent chat failed:', error instanceof Error ? error.message : error);
     return c.json({ ok: false, error: 'Your agent could not answer right now. Try again in a moment.' }, 502);
   }
+});
+
+const messageSchema = z.object({
+  from: z.enum(['agent', 'me']),
+  text: z.string().min(1).max(4000),
+  key: z.string().max(200).optional(),
+  arrangementId: z.string().max(100).optional(),
+  suggest: z.object({ arrangementId: z.string(), cents: z.number().int() }).optional(),
+});
+
+agentRouter.get('/messages', async (c) => c.json({ ok: true, messages: await listChat(c.get('user').id) }));
+
+agentRouter.post('/messages', async (c) => {
+  const parsed = messageSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ ok: false, error: 'Invalid request body' }, 400);
+  const { suggest, ...rest } = parsed.data;
+  await saveChat(c.get('user').id, { ...rest, ...(suggest ? { suggest } : {}) });
+  return c.json({ ok: true });
+});
+
+agentRouter.delete('/messages', async (c) => {
+  await clearChat(c.get('user').id);
+  return c.json({ ok: true });
 });

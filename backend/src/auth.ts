@@ -32,7 +32,7 @@ const clerk = createClerkClient({ secretKey: config.CLERK_SECRET_KEY });
 type Profile = { handle: string | null; imageUrl: string | null };
 const profileCache = new Map<string, Profile>();
 
-async function clerkProfile(clerkId: string): Promise<Profile> {
+export async function clerkProfile(clerkId: string): Promise<Profile> {
   const cached = profileCache.get(clerkId);
   if (cached) return cached;
   try {

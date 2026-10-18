@@ -16,11 +16,11 @@ const dollars = (cents: number): string => {
 export function templateWording(ctx: WordingContext): string {
   const amount = ctx.amountCents === null ? '' : dollars(ctx.amountCents);
   switch (ctx.tone) {
-    case 'open': return `Could you do ${amount}?`;
-    case 'counter': return `How about ${amount}?`;
+    case 'open': return amount ? `Could you do ${amount}?` : 'Here is my opening offer.';
+    case 'counter': return amount ? `How about ${amount}?` : 'Here is my counter-offer.';
     case 'accept': return 'That works for me.';
-    case 'review': return `${amount} is below my asking price. I'll check with my user.`;
-    case 'defer': return `${amount} is above what I can confirm myself. I'll check with my user.`;
+    case 'review': return amount ? `${amount} is below my asking price. I'll check with my user.` : "That's below my asking price. I'll check with my user.";
+    case 'defer': return amount ? `${amount} is above what I can confirm myself. I'll check with my user.` : "That's above what I can confirm myself. I'll check with my user.";
     default: return "Sorry, we can't make this work.";
   }
 }
@@ -55,10 +55,11 @@ export async function llmWording(ctx: WordingContext): Promise<string> {
   return text.trim().slice(0, 240);
 }
 
-let provider: (ctx: WordingContext) => Promise<string> = llmWording;
+// Templates by default: an LLM call per negotiation line would burn the provider's per-minute request cap. llmWording stays available via setWordingProvider.
+let provider: (ctx: WordingContext) => Promise<string> = async (ctx) => templateWording(ctx);
 
 export function setWordingProvider(fn?: (ctx: WordingContext) => Promise<string>): void {
-  provider = fn ?? llmWording;
+  provider = fn ?? (async (ctx) => templateWording(ctx));
 }
 
 export async function wording(ctx: WordingContext): Promise<string> {

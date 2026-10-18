@@ -12,6 +12,7 @@ import { channelRouter } from './channel/routes.js';
 import { discoveryRouter } from './discovery/routes.js';
 import { installNegotiation } from './negotiation/session.js';
 import { negotiationRouter } from './negotiation/routes.js';
+import { seedRouter } from './seed/routes.js';
 import { startRuntime } from './runtime/registry.js';
 import { runtimeRouter } from './runtime/routes.js';
 import { arrangementsRouter } from './arrangements/routes.js';
@@ -40,6 +41,7 @@ app.route('/map', publicMapRouter);
 app.route('/me', channelRouter);
 app.route('/me', contactRouter);
 app.route('/agent', agentRouter);
+app.route('/dev', seedRouter);
 
 installNegotiation();
 installSseBridge();

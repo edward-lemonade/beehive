@@ -9,7 +9,7 @@ import { runSession } from './session.js';
 
 export type DirectResult =
   | { status: 'not_found' | 'forbidden' | 'not_relevant' | 'no_link' }
-  | { status: 'no_price_needed' }
+  | { status: 'no_price_needed' | 'no_price_named' }
   | { status: 'needs_bound_change' }
   | { status: 'agreed'; amountCents: number; rounds: number }
   | { status: 'failed'; rounds: number };
@@ -81,6 +81,11 @@ export async function negotiateDirect(
   const receiverBounds = deriveLinkBounds(party(receiver), terms, all, new Map());
 
   const ownIsPayer = payer === own;
+  // Nobody named a price or a floor: there is nothing to offer, and inventing $0 would be wrong.
+  if (input.targetCents === undefined && terms.payCents === null && terms.askCents === null
+    && !terms.payerFirm && !terms.receiverFirm && receiverBounds.minCents === 0) {
+    return { status: 'no_price_named' };
+  }
   if (input.targetCents !== undefined) {
     const ok = ownIsPayer
       ? withinBounds('payer', input.targetCents, payerBounds)

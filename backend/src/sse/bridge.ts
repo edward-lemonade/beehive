@@ -1,6 +1,7 @@
 import { events } from '../events.js';
 import { getIntentRepository } from '../intents/service.js';
 import { routeToUser, smsTextFor } from '../channel/service.js';
+import { saveChat } from '../agent/messages.js';
 import { sseHub } from './hub.js';
 
 let installed = false;
@@ -53,11 +54,29 @@ export function installSseBridge(): void {
       const repo = getIntentRepository();
       const [own, other] = await Promise.all([repo.get(e.intentId), repo.get(e.counterpartIntentId)]);
       if (!own) return;
+      const arr = e.arrangementId ? await (await import('../arrangements/repository.js')).arrangementRepo().get(e.arrangementId) : undefined;
+      const dealParts = (arr?.links ?? []).filter((l) => (l.a === e.intentId || l.b === e.intentId) && l.payer).length;
       events.emit('notify', {
         userId: own.ownerId,
         kind: 'needs_user',
-        payload: { side: e.side ?? 'payer', amountCents: e.amountCents, counterpartHandle: other?.public.ownerHandle ?? 'unknown', intentId: e.intentId, arrangementId: e.arrangementId },
+        payload: { multi: dealParts > 1, side: e.side ?? 'payer', amountCents: e.amountCents, counterpartHandle: other?.public.ownerHandle ?? 'unknown', intentId: e.intentId, arrangementId: e.arrangementId },
       });
+    })().catch(() => {});
+  });
+
+  // A counterparty's approval is written into the other users' stored chat, so it is there whether or not their page is open.
+  events.on('arrangement.approved', ({ arrangementId, intentId }) => {
+    void (async () => {
+      const arr = await (await import('../arrangements/repository.js')).arrangementRepo().get(arrangementId);
+      const approver = arr?.slots.find((s) => s.intentId === intentId);
+      if (!arr || !approver) return;
+      const repo = getIntentRepository();
+      const handle = (await repo.get(intentId))?.public.ownerHandle ?? 'The other user';
+      const direct = new Set(arr.links.flatMap((l) => (l.a === intentId ? [l.b] : l.b === intentId ? [l.a] : [])));
+      for (const slot of arr.slots.filter((s) => direct.has(s.intentId))) {
+        await saveChat(slot.userId, { from: 'agent', text: `${handle} approved their side of the deal.`, key: `approved:${arrangementId}:${intentId}:${arr.revision}`, arrangementId });
+        sseHub.publishToUser(slot.userId, { type: 'chat.message', payload: { arrangementId } });
+      }
     })().catch(() => {});
   });
 

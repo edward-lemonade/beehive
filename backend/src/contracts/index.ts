@@ -122,6 +122,7 @@ export const termsViewSchema = z.object({
   declaredNetCents: z.number().int().nullable(),
   grade: z.enum(['exact', 'within_tolerance']),
   otherParticipants: z.number().int().nonnegative(),
+  unpriced: z.array(z.object({ otherHandle: z.string(), role: z.enum(['buyer', 'seller']), items: z.array(z.string()) })).optional(),
 });
 
 export const arrangementSchema = z.object({

@@ -171,6 +171,21 @@ describe('end to end', () => {
     expect(kinds('ubob', 'approval_request').length).toBeGreaterThan(0);
   });
 
+  it('leaves a link nobody priced unpriced, tells the seller to name it, and blocks approval', async () => {
+    const plainCash: Item = { kind: 'cash', label: 'cash', attrs: {}, qty: 1 };
+    add('edward', [ticket('sat'), ticket('sun')], [[ticket('three')]], null);
+    add('acmm', [plainCash], [[ticket('sat')], [ticket('sun')]], null);
+    add('dawg', [ticket('three')], [[plainCash]], null);
+    await start('edward', 'acmm', 'dawg');
+    await waitFor(() => byState('proposed').length === 1);
+    const arr = byState('proposed')[0]!;
+    expect(arr.links.filter((l) => l.payer).every((l) => l.amountCents === null)).toBe(true);
+    const view = (await service.listMine('udawg')).find((a) => a.terms.arrangementId === arr.id)!.terms;
+    expect(view.unpriced).toEqual([{ otherHandle: 'h-edward', role: 'seller', items: ['three'] }]);
+    expect(view.cashIn).toHaveLength(0);
+    await expect(service.approve('udawg', arr.id)).rejects.toThrow(/price has not been set/);
+  });
+
   it('refuses approval from a user with no public contact', async () => {
     chain();
     await start('alice', 'bob', 'carol');

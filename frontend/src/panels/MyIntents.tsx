@@ -141,10 +141,25 @@ export function MyIntents() {
   const api = useApi()
   const [draft, setDraft] = useState<Draft | null>(null)
   const { up } = useLive()
+  const queryClient = useQueryClient()
+  const seed = useMutation({
+    mutationFn: () => api.loadSeed(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['mine-intents'] })
+      void queryClient.invalidateQueries({ queryKey: ['public'] })
+      void queryClient.invalidateQueries({ queryKey: ['arrangements'] })
+    },
+  })
   const query = useQuery({ queryKey: ['mine-intents'], queryFn: () => api.myIntents(), refetchInterval: pollWhenDown(up) })
   return (
     <section aria-label="My intents" className="flex flex-col lg:h-full lg:min-h-0">
-      <h2 className="mb-2 text-lg font-semibold">My intents</h2>
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="text-lg font-semibold">My intents</h2>
+        <button disabled={seed.isPending} onClick={() => seed.mutate()} className="rounded border border-slate-300 px-2 py-0.5 text-xs disabled:opacity-50">
+          {seed.isPending ? 'Loading…' : 'Load seed data'}
+        </button>
+      </div>
+      {seed.isError && <p role="alert" className="mb-2 text-xs text-red-600">{errorMessage(seed.error)}</p>}
       <NewIntent draft={draft} setDraft={setDraft} />
       <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1">
       {query.isError && <p role="alert" className="text-sm text-red-600">{errorMessage(query.error)}</p>}

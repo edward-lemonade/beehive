@@ -32,11 +32,17 @@ export type AgentChatInput = {
 }
 export type AgentChatResult = { reply: string; draft: Draft | null; changed: boolean }
 
+export type StoredChat = { from: 'agent' | 'me'; text: string; key?: string; arrangementId?: string; suggest?: { arrangementId: string; cents: number }; at: number }
+
 export type Api = {
+  chatMessages(): Promise<StoredChat[]>
+  saveChatMessage(message: Omit<StoredChat, 'at'>): Promise<void>
+  clearChatMessages(): Promise<void>
   publicIntents(): Promise<IntentPublic[]>
   myIntents(): Promise<MyIntent[]>
   createDraft(text: string): Promise<Draft>
   agentChat(input: AgentChatInput): Promise<AgentChatResult>
+  loadSeed(): Promise<void>
   answerDraft(id: string, text: string): Promise<Draft>
   confirmDraft(id: string): Promise<void>
   editIntent(id: string, text: string): Promise<void>
@@ -98,6 +104,17 @@ export function createHttpApi(getToken: TokenGetter, baseUrl = API_URL): Api {
       const r = await post('/agent/chat', input)
       return { reply: z.string().parse(r.reply), draft: draftSchema.nullable().parse(r.draft ?? null), changed: Boolean(r.changed) }
     },
+    chatMessages: async () => z.array(z.object({
+      from: z.enum(['agent', 'me']),
+      text: z.string(),
+      key: z.string().optional(),
+      arrangementId: z.string().optional(),
+      suggest: z.object({ arrangementId: z.string(), cents: z.number() }).optional(),
+      at: z.number(),
+    })).parse((await request('/agent/messages')).messages),
+    saveChatMessage: async (message) => void (await post('/agent/messages', message)),
+    clearChatMessages: async () => void (await request('/agent/messages', { method: 'DELETE' })),
+    loadSeed: async () => void (await post('/dev/seed')),
     createDraft: async (text) => draftSchema.parse((await post('/intents/draft', { text })).draft),
     answerDraft: async (id, text) => draftSchema.parse((await post(`/intents/draft/${id}/answer`, { text })).draft),
     confirmDraft: async (id) => void (await post(`/intents/draft/${id}/confirm`)),

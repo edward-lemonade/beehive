@@ -57,6 +57,7 @@ export function termsView(
   const cashOut: TermsView['cashOut'] = [];
   const cashIn: TermsView['cashIn'] = [];
   const counterparties = new Set<string>();
+  const unpriced: NonNullable<TermsView['unpriced']> = [];
 
   for (const link of arr.links) {
     if (link.a !== me && link.b !== me) continue;
@@ -65,6 +66,13 @@ export function termsView(
     for (const flow of link.flows) {
       if (flow.from === me) gives.push({ item: flow.item, toHandle: handleOf(arr, intents, other) });
       if (flow.to === me) gets.push({ item: flow.item, fromHandle: handleOf(arr, intents, other) });
+    }
+    if (link.payer && link.amountCents === null) {
+      unpriced.push({
+        otherHandle: handleOf(arr, intents, other),
+        role: link.payer === me ? 'buyer' : 'seller',
+        items: link.flows.filter((f) => (link.payer === me ? f.to === me : f.from === me)).map((f) => f.item.label),
+      });
     }
     if (link.payer && link.amountCents !== null) {
       if (link.payer === me) cashOut.push({ toHandle: handleOf(arr, intents, other), amountCents: link.amountCents });
@@ -91,5 +99,6 @@ export function termsView(
     declaredNetCents: intent.private.declaredNetCents,
     grade: gradeOf(net, intent),
     otherParticipants: Math.max(0, participants - 1 - counterparties.size),
+    ...(unpriced.length > 0 ? { unpriced } : {}),
   };
 }

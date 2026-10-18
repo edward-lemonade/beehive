@@ -27,6 +27,8 @@ export class Agent {
   dormant = false;
   private notifiedVersion = -1;
 
+  private edgeKey: string | null = null;
+
   constructor(
     readonly intentId: string,
     private readonly requestWake: (reason: WakeReason) => void,
@@ -47,9 +49,13 @@ export class Agent {
     const rowsByFrom = new Map(incomingRows.map((row) => [row.from, row]));
 
     // Absent or stale signals are assumed true so chains and cycles settle on the greatest fixed point.
+    // A new neighbor invalidates earlier verdicts: two agents that each saw only part of the picture can lock each other at false, so start over optimistically.
+    const edgeKey = edges.map((e) => `${e.other}@${e.otherVersion}`).sort().join('|');
+    const edgesChanged = edgeKey !== this.edgeKey;
+    this.edgeKey = edgeKey;
     const incoming: Signal[] = edges.map((edge) => {
       const row = rowsByFrom.get(edge.other);
-      const current = row !== undefined && row.fromVersion === edge.otherVersion && row.toVersion === self.version;
+      const current = !edgesChanged && row !== undefined && row.fromVersion === edge.otherVersion && row.toVersion === self.version;
       return {
         from: edge.other,
         to: self.id,
@@ -126,13 +132,16 @@ export class Agent {
       return { ok: false, reason: 'Net result is below the minimum' };
     }
     // Cash is covered by the net check; itemMatch never matches cash.
+    // The matcher's vetted edges count too: an LLM verdict can accept items whose labels differ.
+    const edges = await getEdges(self.id);
+    const same = (a: { label: string; kind: string }, b: { label: string; kind: string }): boolean => a.kind === b.kind && a.label === b.label;
     for (const item of terms.give.filter((i) => i.kind !== 'cash')) {
-      if (!self.public.give.some((offered) => itemMatch(offered, item))) {
+      if (!self.public.give.some((offered) => itemMatch(offered, item)) && !edges.some((e) => e.selfGives.some((g) => same(g.item, item)))) {
         return { ok: false, reason: 'Item is not offered by this intent' };
       }
     }
     for (const item of terms.receive.filter((i) => i.kind !== 'cash')) {
-      if (!self.public.want.some((slot) => itemMatch(item, slot))) {
+      if (!self.public.want.some((slot) => itemMatch(item, slot)) && !edges.some((e) => e.selfWants.some((w) => same(w.item, item)))) {
         return { ok: false, reason: 'Item is not wanted by this intent' };
       }
     }

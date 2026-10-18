@@ -94,8 +94,29 @@ function agree(given: Item, wanted: WantItem | Item, verdict: boolean | undefine
 function coversFor(wanter: IntentPublic, giver: IntentPublic): EdgeCover[] {
   const covers: EdgeCover[] = [];
   const verdict = pairVerdict(wanter, giver);
+  const used = new Set<Item>();
+  const overlap = (a: Item, b: Item): number => {
+    const other = words(b.label);
+    return words(a.label).filter((w) => other.some((v) => sameWord(w, v))).length;
+  };
+  // Exact fits claim their item first so a verdict-only match never takes an item that belongs to another slot.
+  const chosen = new Map<number, Item>();
+  if (verdict !== false) {
+    wanter.want.forEach((slot, index) => {
+      const exact = giver.give.find((c) => !used.has(c) && itemMatch(c, slot));
+      if (exact) { used.add(exact); chosen.set(index, exact); }
+    });
+  }
   wanter.want.forEach((slot, index) => {
-    const item = giver.give.find((candidate) => agree(candidate, slot, verdict));
+    if (chosen.has(index)) return;
+    const ranked = giver.give
+      .filter((c) => !used.has(c) && agree(c, slot, verdict))
+      .sort((x, y) => Math.max(...slot.anyOf.map((o) => overlap(y, o))) - Math.max(...slot.anyOf.map((o) => overlap(x, o))));
+    const pick = ranked[0];
+    if (pick) { used.add(pick); chosen.set(index, pick); }
+  });
+  wanter.want.forEach((_, index) => {
+    const item = chosen.get(index);
     if (item) covers.push({ slot: `w${index}`, provider: giver.intentId, item });
   });
   return covers;

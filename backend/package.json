@@ -5,6 +5,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "test:live": "vitest run --config vitest.live.config.ts",
     "db:migrate": "node --env-file=.env --import tsx scripts/migrate.ts",
     "lint": "eslint . --ext .ts",
     "dev": "node --env-file=.env --import tsx --watch src/index.ts",

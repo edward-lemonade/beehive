@@ -47,15 +47,14 @@ describe('semantic item judge', () => {
     expect(directlyRelevant(sell, buy)).not.toBeNull();
   });
 
-  it('honours a no verdict and survives judge failures', async () => {
+  it('honours a no verdict and throws when the judge fails', async () => {
     resetSemanticCache();
     setItemJudge(async () => false);
     await primePairs(buy, [sell]);
     expect(directlyRelevant(buy, sell)).toBeNull();
     resetSemanticCache();
     setItemJudge(async () => { throw new Error('down'); });
-    await primePairs(buy, [sell]);
-    expect(directlyRelevant(buy, sell)).toBeNull();
+    await expect(primePairs(buy, [sell])).rejects.toThrow(/LLM_API_KEY/);
     setItemJudge();
     resetSemanticCache();
   });

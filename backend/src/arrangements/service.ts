@@ -176,7 +176,7 @@ async function dispatchRequests(arr: StoredArrangement, opened: StoredSlot[]): P
     const intent = intents.get(slot.intentId);
     if (!intent) continue;
     const floor = intent.private.minNetCents;
-    if (intent.private.autoApprove && floor != null && !arr.proposal && netFor(arr, slot.intentId) >= floor) {
+    if (intent.private.autoApprove && floor != null && !arr.proposal && !arr.links.some((l) => l.payer && l.amountCents === null) && netFor(arr, slot.intentId) >= floor) {
       // The user gave a standing limit, so a deal at or above it is approved without asking.
       const { userId } = slot;
       setImmediate(() => { approve(userId, arr.id).catch(() => {}); });
@@ -521,6 +521,9 @@ async function approveSlotLocked(arr: StoredArrangement, slot: StoredSlot): Prom
     if (slot.approval === 'queued') throw new ArrangementError('This arrangement is waiting for your other pending approvals', 409);
     if (slot.approval !== 'requested') throw notProposed();
 
+    if (arr.links.some((l) => l.payer && l.amountCents === null)) {
+      throw new ArrangementError('A price has not been set yet, so there is nothing to approve', 409);
+    }
     if (!(await contactsFor([slot.userId])).get(slot.userId)) {
       throw new ArrangementError('Add a public contact in your profile before approving a deal', 409);
     }
@@ -544,6 +547,7 @@ async function approveSlotLocked(arr: StoredArrangement, slot: StoredSlot): Prom
     clearTimer(`${arr.id}|${slot.intentId}`);
     if (!(await persist(arr))) throw notProposed();
     promoteQueue.add(userId);
+    events.emit('arrangement.approved', { arrangementId: arr.id, intentId: slot.intentId });
     if (arr.slots.every((s) => s.approval === 'approved')) await commitLocked(arr);
   }
 }
@@ -627,7 +631,13 @@ export function negotiateFurther(
     if (slot.approval !== 'requested' && slot.approval !== 'approved') throw new ArrangementError('Only an open request can be renegotiated', 409);
 
     const cashLinks = arr.links.filter((l) => l.payer && (l.a === slot.intentId || l.b === slot.intentId));
-    const link = input.linkId ? cashLinks.find((l) => l.id === input.linkId) : cashLinks.length === 1 ? cashLinks[0] : undefined;
+    // With several cash links, the one still unpriced that this user sells on is the one they are being asked to name.
+    const toName = cashLinks.filter((l) => l.amountCents === null && l.payer !== slot.intentId);
+    const unpricedLinks = cashLinks.filter((l) => l.amountCents === null);
+    const link = input.linkId ? cashLinks.find((l) => l.id === input.linkId)
+      : cashLinks.length === 1 ? cashLinks[0]
+      : toName.length === 1 ? toName[0]
+      : unpricedLinks.length === 1 ? unpricedLinks[0] : undefined;
     if (!link) throw new ArrangementError('Choose which cash link to renegotiate', 400);
 
     const side = link.payer === slot.intentId ? 'payer' : 'receiver';

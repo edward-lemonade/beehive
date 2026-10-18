@@ -212,13 +212,14 @@ describe('priceArrangement', () => {
     expect((await priceArrangement(arrangement())).reason).toBe('stale');
   });
 
-  it('does not add a spoken line to plain offers and accepts', async () => {
+  it('gives every offer and accept a spoken line', async () => {
     s1();
     await connect('A', 'B', 'C');
-    setWordingProvider(async () => 'chatter');
+    setWordingProvider(async () => 'ok');
     const result = await priceArrangement(arrangement());
     expect(result.state).toBe('agreed');
-    expect(log.entries.filter((e) => e.kind === 'say')).toHaveLength(0);
+    const money = log.entries.filter((e) => e.kind === 'offer' || e.kind === 'accept');
+    expect(log.entries.filter((e) => e.kind === 'say')).toHaveLength(money.length);
   });
 });
 

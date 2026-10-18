@@ -8,6 +8,7 @@ export type EventMap = {
   'arrangement.priced': { arrangementId: string };
   'arrangement.proposed': { arrangementId: string };
   'arrangement.committed': { arrangementId: string };
+  'arrangement.approved': { arrangementId: string; intentId: string };
   'arrangement.dissolved': { arrangementId: string; reason?: string };
   'slot.vacated': { arrangementId: string; intentId: string };
   'negotiation.round': {

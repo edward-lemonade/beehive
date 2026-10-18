@@ -28,7 +28,12 @@ export function nothingFound(role: Role | null): string {
 
 export const matchFound = (): string => 'Good news, I found a match. Here are the terms. Want me to lock it in?'
 
-export function needsYourCall(side: 'payer' | 'receiver', handle: string, cents?: number): string {
+export function needsYourCall(side: 'payer' | 'receiver', handle: string, cents?: number, multi = false): string {
+  if (multi) {
+    return side === 'receiver'
+      ? `${handle} offered ${cents !== undefined ? money(cents) : 'a different price'} for part of your deal. Your deal only works if every part does, so tell me a price for this part that keeps the whole deal worth it.`
+      : `${handle} asks ${cents !== undefined ? money(cents) : 'a price'} for part of your deal. It only works if every part does, so tell me the price you want for what you're giving up so the total works out, and I'll only go ahead if the whole thing does.`
+  }
   const price = cents !== undefined ? money(cents) : 'a different price'
   return side === 'receiver'
     ? `${handle} offered ${price}, which is below your ask. Should I take it, hold out, or counter? Tell me a price.`

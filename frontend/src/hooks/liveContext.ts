@@ -60,7 +60,7 @@ export function chatFor(event: StreamEvent, intents: MyIntent[] | undefined): Ch
         case 'needs_user': {
           const side = d.side === 'receiver' ? 'receiver' : 'payer'
           const cents = typeof d.amountCents === 'number' ? d.amountCents : undefined
-          return { from: 'agent', text: speech.needsYourCall(side, handleOf(d), cents), ...(aid ? { key: `need:${aid}:${cents}` } : {}) }
+          return { from: 'agent', text: speech.needsYourCall(side, handleOf(d), cents, d.multi === true), ...(aid ? { key: `need:${aid}:${cents}` } : {}) }
         }
         case 'nothing_found': {
           const mine = intents?.find((i) => i.id === d.intentId)

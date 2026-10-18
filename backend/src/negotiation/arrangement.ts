@@ -82,11 +82,16 @@ export async function priceArrangement(arrangement: { id: string; slots: Slot[];
     const target = pricingOrder(remaining)[0]!;
     const payer = intents.get(target.payer)!;
     const receiver = intents.get(target.receiver)!;
-    const bounds = linkBounds(
-      target,
-      deriveLinkBounds(partyOf(payer), target, terms, priced),
-      deriveLinkBounds(partyOf(receiver), target, terms, priced),
-    );
+    const payerBounds = deriveLinkBounds(partyOf(payer), target, terms, priced);
+    const receiverBounds = deriveLinkBounds(partyOf(receiver), target, terms, priced);
+    // Nobody has named a price, so there is nothing to haggle over: leave the link unpriced for the seller to name.
+    if (target.payCents === null && target.askCents === null && !target.payerFirm && !target.receiverFirm && receiverBounds.minCents === 0) {
+      target.link.amountCents = null;
+      target.link.state = 'unpriced';
+      remaining = remaining.filter((t) => t !== target);
+      continue;
+    }
+    const bounds = linkBounds(target, payerBounds, receiverBounds);
     ensureAgent(payer.id);
     ensureAgent(receiver.id);
 
@@ -179,6 +184,10 @@ export async function repriceLink(
     if (latest && latest.from !== mine && latest.amountCents === anchor.cents) {
       return { state: 'agreed', amountCents: anchor.cents };
     }
+  }
+  if (anchor.cents === undefined && target.payCents === null && target.askCents === null
+    && !target.payerFirm && !target.receiverFirm && receiverBounds.minCents === 0) {
+    return { state: 'failed', reason: 'no_price_named' };
   }
   const bounds = linkBounds(target, payerBounds, receiverBounds, anchor.cents === undefined
     ? {}

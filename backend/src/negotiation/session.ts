@@ -15,7 +15,7 @@ import {
 } from './pricing.js';
 import { templateWording, wording, type WordingContext } from './wording.js';
 
-export const SESSION_TIMEOUT_MS = 15_000;
+export const SESSION_TIMEOUT_MS = 90_000;
 
 export type SessionOptions = {
   key: string;
@@ -108,6 +108,8 @@ class Session {
     if (!withinBounds(side, amountCents, this.bounds(side))) {
       throw new Error(`Out-of-bounds ${kind} on ${this.opts.key} (${side})`);
     }
+    // The agent says its line first so the conversation reads in order, before the reply it triggers.
+    await this.say(side, { round, amountCents, tone });
     const body: BusBody = kind === 'offer'
       ? { type: 'offer', linkId: this.opts.key, round, amountCents }
       : { type: 'accept', linkId: this.opts.key, amountCents };
@@ -116,14 +118,15 @@ class Session {
       return false;
     }
     await this.record(side, round, kind, amountCents, null);
-    // The offer or accept is the message; a spoken line is added only when the agent has something to explain.
     return true;
   }
 
   private async say(side: Side, ctx: WordingContext): Promise<void> {
     const generated = await wording(ctx);
     const fallback = templateWording(ctx);
-    for (const text of generated === fallback ? [fallback] : [generated, fallback]) {
+    // The guard blocks any line whose number matches a private bound, so the last resort names no amount; the offer itself carries it.
+    const plain = templateWording({ ...ctx, amountCents: null });
+    for (const text of [...new Set([generated, fallback, plain])]) {
       if (await this.deliver(side, { type: 'say', linkId: this.opts.key, text })) {
         await this.record(side, ctx.round, 'say', null, text);
         return;
@@ -196,7 +199,7 @@ class Session {
         return;
       }
       if (body.amountCents >= ask) {
-        await this.sendMoney('receiver', 'accept', round, ask, 'accept');
+        await this.sendMoney('receiver', 'accept', round, body.amountCents, 'accept');
       } else {
         await this.sendMoney('receiver', 'offer', round, nextOffer(this.state(round + 1), 'receiver'), 'counter');
       }

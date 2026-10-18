@@ -15,13 +15,38 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [chat, setChat] = useState<ChatMsg[]>([])
   const chatSeq = useRef(0)
+  // Saves run in order so a clear never lands after the messages that follow it.
+  const saves = useRef<Promise<unknown>>(Promise.resolve())
+  const loaded = useRef<Promise<void>>(Promise.resolve())
+  const persist = useCallback((task: () => Promise<unknown>) => {
+    saves.current = saves.current.then(() => loaded.current).then(task).catch(() => {})
+  }, [])
   const postChat = useCallback((message: ChatInput) => {
     chatSeq.current += 1
     const id = chatSeq.current
     setChat((prev) => appendChat(prev, message, id, Date.now()))
-  }, [])
+    const { key, arrangementId, suggest } = message
+    persist(() => api.saveChatMessage({ from: message.from, text: message.text, ...(key ? { key } : {}), ...(arrangementId ? { arrangementId } : {}), ...(suggest ? { suggest } : {}) }))
+  }, [api, persist])
 
-  const clearChat = useCallback(() => setChat([]), [])
+  const clearChat = useCallback(() => {
+    setChat([])
+    persist(() => api.clearChatMessages())
+  }, [api, persist])
+
+  const loadChat = useCallback(() => api.chatMessages().then((stored) => {
+    setChat((prev) => {
+      const have = new Set(prev.map((m) => m.key).filter(Boolean))
+      const fresh = stored.filter((m) => !m.key || !have.has(m.key))
+      if (fresh.length === 0) return prev
+      const restored = fresh.map((m) => ({ ...m, id: (chatSeq.current += 1) }))
+      return [...restored, ...prev].sort((x, y) => x.at - y.at).slice(-300)
+    })
+  }, () => {}), [api])
+
+  useEffect(() => {
+    loaded.current = loadChat()
+  }, [loadChat])
 
   useEffect(() => {
     let seq = 0
@@ -45,6 +70,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         if (event.type === 'notify' || event.type.startsWith('arrangement.') || event.type === 'slot.vacated') {
           void queryClient.invalidateQueries({ queryKey: ['arrangements'] })
         }
+        if (event.type === 'chat.message') void loadChat()
         if (event.type === 'negotiation.round') {
           const id = (seq += 1)
           const at = Date.now()
@@ -60,7 +86,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       },
     })
     return unsubscribe
-  }, [api, queryClient, postChat])
+  }, [api, queryClient, postChat, loadChat])
 
   const value = useMemo(() => ({ up, feed, conversations, chat, postChat, clearChat }), [up, feed, conversations, chat, postChat, clearChat])
   return <LiveContext.Provider value={value}>{children}</LiveContext.Provider>
