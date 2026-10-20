@@ -16,6 +16,8 @@
   "dependencies": {
     "@clerk/backend": "^1.16.0",
     "@hono/node-server": "^1.13.0",
+    "@langchain/core": "^1.2.18",
+    "@langchain/openai": "^1.6.2",
     "@sentry/cloudflare": "^11.8.0",
     "@sentry/hono": "^11.8.0",
     "@sentry/node": "^11.8.0",

@@ -9,6 +9,9 @@ import { defineConfig } from 'vite'
 const uploadSourceMaps = Boolean(process.env.SENTRY_AUTH_TOKEN)
 
 export default defineConfig({
+  server: {
+    port: 5174
+  },
   plugins: [
     react(),
     tailwindcss(),

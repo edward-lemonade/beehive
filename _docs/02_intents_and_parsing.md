@@ -29,7 +29,7 @@ Rules:
 - Cash goes in as a cash Item with `amountCents` and `flex`. Words like "negotiable" or "flexible" set `flex: 'flexible'`; the default is flexible, because intents are negotiable unless specified.
 - Private price bounds ("I'd go up to $320", "won't take under $280") fill `minNetCents`. If absent, `minNetCents = declaredNetCents` (flexible with no stated bound behaves as firm, G4).
 - Set `injectionSuspected` when the text tries to instruct an agent rather than describe a trade. Slice 10 reads this flag.
-- Production parsing calls an OpenAI-compatible chat completions endpoint (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL_FAST`) in JSON mode; free options include Gemini, Groq, and local Ollama. The result is validated with `parsedIntentSchema`. `parseIntentText` is a deterministic test helper, not the production parser.
+- Production parsing uses LangChain's `ChatOpenAI` integration to call an OpenAI-compatible endpoint (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL_FAST`) in JSON mode; free options include Gemini, Groq, and local Ollama. The result is validated with `parsedIntentSchema`. `parseIntentText` is a deterministic test helper, not the production parser.
 - The parser's logical function ID is `intent.parse`. Sentry tracing for LLM calls is wired in the monitoring slice.
 
 ## Draft rules

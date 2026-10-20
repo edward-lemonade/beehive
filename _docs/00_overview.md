@@ -76,6 +76,13 @@ Parallel lanes once 01 is merged:
 8. When all approvals are valid, commit (07). Contacts go only to counterparties.
 9. A decline, timeout, or withdrawal retracts signals, and the coordinator looks for a replacement with identical terms for everyone else.
 
+## How we built it
+- **Real-time interface:** The React app streams authenticated server-sent events (SSE) from the API. It reconnects with backoff and updates the public feed, arrangements, activity feed, and chat as events arrive. Chat messages are saved with unique keys, so reconnects and reloads don't duplicate them. Photon text messages use the same agent-chat flow as the web app.
+- **Runtime and bus:** Each open intent gets a lightweight agent in the backend process. An event-driven scheduler coalesces repeated wakeups and prevents overlapping work for the same agent. Agents exchange status signals and negotiation messages over an in-process, per-recipient ordered bus. A guard validates message schemas, recipients, versions, and private-bound leakage before delivery.
+- **Engine and arrangements:** Discovery builds edges between directly compatible intents using structured item data. A pure, deterministic engine prunes intents that cannot satisfy all their item needs, finds viable closed groups, then searches for complete item allocations while respecting quantities and direct-counterparty links. Search has explicit time and expansion budgets. A coordinator turns valid solutions into arrangements, prices each link, checks each participant's terms, and manages approvals, replacements, and commit.
+- **Negotiation and agent logic:** Agents negotiate link-by-link using offers computed in code and checked against private price bounds. The LLM helps interpret user messages and phrase negotiation text; it does not choose amounts or approve deals. Once everyone approves, the backend commits the arrangement transactionally.
+- **Stack and observability:** The app uses React/TypeScript, a Node.js API, PostgreSQL, Clerk, and Photon. Sentry traces, structured logs, metrics, and agent evaluations help us follow the flow and investigate failed or desynchronized conversations.
+
 ## Rules every slice must follow
 1. **No gossip.** Agent-to-agent messages go only through the bus (05), only to directly relevant intents, and only carry the allowed body types (01). The guard enforces this.
 2. **Bounds live in code.** An LLM never decides a price, a status, or an approval. It parses text and words messages.

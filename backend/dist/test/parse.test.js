@@ -3,6 +3,18 @@ import { parseIntent, parseIntentText } from '../src/intents/parse.js';
 afterEach(() => {
     vi.unstubAllGlobals();
 });
+const completionResponse = (content) => new Response(JSON.stringify({
+    id: 'chatcmpl-test',
+    object: 'chat.completion',
+    created: 0,
+    model: 'test-model',
+    choices: [{
+            index: 0,
+            message: { role: 'assistant', content },
+            finish_reason: 'stop',
+        }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+}), { status: 200, headers: { 'content-type': 'application/json' } });
 describe('structured intent parser', () => {
     it('keeps a negotiable ask separate from a firm minimum in the fallback parser', () => {
         expect(parseIntentText("I'm selling a ticket for $110, negotiable.")).toMatchObject({
@@ -23,9 +35,7 @@ describe('structured intent parser', () => {
                 messages: [{ role: 'system' }, { role: 'user', content: text }],
                 response_format: { type: 'json_object' },
             });
-            return new Response(JSON.stringify({
-                choices: [{ message: { content: JSON.stringify(parsed) } }],
-            }), { status: 200 });
+            return completionResponse(JSON.stringify(parsed));
         });
         vi.stubGlobal('fetch', fetchMock);
         const result = await parseIntent(text);
@@ -69,9 +79,7 @@ describe('structured intent parser', () => {
     `);
     });
     it('rejects invalid structured output instead of returning a partial parse', async () => {
-        vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-            choices: [{ message: { content: JSON.stringify({ give: [], want: [] }) } }],
-        }), { status: 200 })));
+        vi.stubGlobal('fetch', vi.fn(async () => completionResponse(JSON.stringify({ give: [], want: [] }))));
         await expect(parseIntent('selling a ticket')).rejects.toThrow();
     });
 });
